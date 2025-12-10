@@ -25,7 +25,7 @@ program
   .action(async () => {
     try {
       logger.info('Starting schema analysis...');
-      const { runPlanner } = await import('./planner/index');
+      const { runPlanner } = await import('./agents/planner/index');
       await runPlanner();
       logger.info('Schema analysis completed');
     } catch (error) {
@@ -108,7 +108,7 @@ program
 
       // Phase 1: Plan
       logger.info('Phase 1: Planning...');
-      const { runPlanner } = await import('./planner/index');
+      const { runPlanner } = await import('./agents/planner/index');
       await runPlanner();
 
       // Phase 2: Document

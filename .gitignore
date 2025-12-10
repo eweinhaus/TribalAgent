@@ -17,6 +17,7 @@ dist/
 docs/
 data/
 progress/
+memory-bank/
 
 # IDE
 .vscode/

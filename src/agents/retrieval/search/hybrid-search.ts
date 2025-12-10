@@ -6,7 +6,7 @@
  */
 
 import { Database } from 'better-sqlite3';
-import { logger } from '../utils/logger.js';
+import { logger } from '../../../utils/logger.js';
 
 export interface SearchOptions {
   query: string;

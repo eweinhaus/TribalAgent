@@ -9,7 +9,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { z } from 'zod';
 import Database, { Database as DatabaseType } from 'better-sqlite3';
-import { HybridSearch } from '../../search/hybrid-search.js';
+import { HybridSearch } from './search/hybrid-search.js';
 
 // Function signatures for external MCP tool consumption
 export interface SearchTablesParams {
