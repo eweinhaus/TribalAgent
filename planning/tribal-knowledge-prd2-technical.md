@@ -42,9 +42,9 @@ The system follows a deep agent architecture with explicit planning, sub-agent d
 - Output: Populated SQLite database with FTS5 and vector indices
 - State: Progress tracked in indexer-progress.json
 
-**Agent 3: Index Retrieval**
+**Agent 3: Index Retrieval / MCP Server**
 - Responsibility: Handle search queries, perform hybrid search, return context-aware results
-- Input: Function calls from external MCP (MCP tools implemented in separate repo)
+- Input: MCP tool calls from external agents
 - Output: Structured JSON responses with search results
 - State: Stateless (reads from database)
 
@@ -54,11 +54,10 @@ The system follows a deep agent architecture with explicit planning, sub-agent d
 - Purpose: Handle complete documentation of a single table
 - Spawned by: Agent 1 Documenter (one per table)
 - Responsibilities:
-  - Receive metadata from plan (extracted by Schema Analyzer)
+  - Extract metadata for assigned table
   - Sample data from table
   - Spawn ColumnInferencer for each column
-  - Generate complete markdown file (human-readable)
-  - Generate JSON output file (for planner consumption)
+  - Generate complete markdown file
   - Return summary to parent documenter
 - Context Quarantine: Returns only summary, not raw data
 
@@ -76,17 +75,16 @@ The system follows a deep agent architecture with explicit planning, sub-agent d
 
 Step 1: User triggers `npm run plan` (manual)
 Step 2: Planner reads databases.yaml, connects to each database
-Step 3: Planner counts tables, analyzes relationships, extracts metadata for each table
-Step 4: Planner detects domains, prioritizes tables
-Step 5: Planner writes documentation-plan.json with complete table metadata
-Step 6: User reviews plan, optionally modifies
-Step 7: User triggers `npm run document` (manual)
-Step 8: Documenter reads plan (Planner has already iterated through all tables and extracted metadata)
-Step 9: Documenter spawns TableDocumenter sub-agent for each table entry in plan
-Step 10: TableDocumenter receives complete metadata from plan (no extraction needed), samples data, spawns ColumnInferencer per column
-Step 11: Each ColumnInferencer loads prompt template, calls LLM, returns description
-Step 12: TableDocumenter assembles markdown and JSON outputs, writes to /docs, returns summary
-Step 13: Documenter updates progress, continues to next table
+Step 3: Planner counts tables, analyzes relationships, detects domains
+Step 4: Planner writes documentation-plan.json
+Step 5: User reviews plan, optionally modifies
+Step 6: User triggers `npm run document` (manual)
+Step 7: Documenter reads plan, iterates through tables
+Step 8: For each table, Documenter spawns TableDocumenter sub-agent
+Step 9: TableDocumenter extracts metadata, spawns ColumnInferencer per column
+Step 10: Each ColumnInferencer loads prompt template, calls LLM, returns description
+Step 11: TableDocumenter assembles markdown, writes to /docs, returns summary
+Step 12: Documenter updates progress, continues to next table
 Step 13: User triggers `npm run index` (manual)
 Step 14: Indexer reads /docs, extracts keywords, generates embeddings
 Step 15: Indexer populates SQLite with documents, FTS5 index, vectors
@@ -314,18 +312,12 @@ Step 1: Load databases.yaml and validate connections
 Step 2: For each database, connect and query table counts
 Step 3: For each database, query foreign key relationships
 Step 4: Build relationship graph (which tables reference which)
-Step 5: Extract table metadata for each table
-  - Query columns from information_schema
-  - Query primary key constraints
-  - Query foreign key constraints with referenced tables
-  - Query index definitions
-  - Get approximate row count
-Step 6: Load domain-inference.md prompt template
-Step 7: Call LLM with table list and relationship graph
-Step 8: Parse domain assignments from LLM response
-Step 9: Estimate complexity (simple: <50 tables, moderate: 50-200, complex: >200)
-Step 10: Generate prioritized table list (core domain tables first)
-Step 11: Write documentation-plan.json with all metadata
+Step 5: Load domain-inference.md prompt template
+Step 6: Call LLM with table list and relationship graph
+Step 7: Parse domain assignments from LLM response
+Step 8: Estimate complexity (simple: <50 tables, moderate: 50-200, complex: >200)
+Step 9: Generate prioritized table list (core domain tables first)
+Step 10: Write documentation-plan.json
 
 ### 4.4 Output: documentation-plan.json
 
@@ -343,25 +335,6 @@ Step 11: Write documentation-plan.json with all metadata
     - priority: 1 (core), 2 (standard), 3 (system/audit)
     - column_count: Number of columns
     - has_relationships: Boolean
-    - metadata: Complete table metadata object
-      - columns: Array of column objects
-        - name: Column name
-        - data_type: SQL data type
-        - is_nullable: YES or NO
-        - column_default: Default value or null
-        - ordinal_position: Column order
-        - comment: Existing database comment or null
-      - primary_key: Array of primary key column names
-      - foreign_keys: Array of foreign key objects
-        - constraint_name: FK constraint name
-        - column_name: Source column
-        - referenced_table: Fully qualified referenced table
-        - referenced_column: Referenced column name
-      - indexes: Array of index objects
-        - index_name: Index name
-        - columns: Array of column names in index
-        - is_unique: Boolean
-        - index_definition: Full CREATE INDEX statement
 - total_tables: Sum across all databases
 - total_estimated_time_minutes: Overall estimate
 - complexity: simple, moderate, or complex
@@ -520,11 +493,11 @@ Structure:
 
 ---
 
-## 6. Retrieval Function Specifications (Called by External MCP)
+## 6. MCP Tool Specifications
 
-### 6.1 Function: search_tables
+### 6.1 Tool: search_tables
 
-Purpose: Find tables relevant to a natural language query (called by external MCP tools)
+Purpose: Find tables relevant to a natural language query
 
 **Input Parameters**:
 - query (string, required): Natural language search query
@@ -550,9 +523,9 @@ Purpose: Find tables relevant to a natural language query (called by external MC
 - tokens_used: Approximate token count
 - total_matches: Count before limit applied
 
-### 6.2 Function: get_table_schema
+### 6.2 Tool: get_table_schema
 
-Purpose: Retrieve full schema details for a specific table (called by external MCP tools)
+Purpose: Retrieve full schema details for a specific table
 
 **Input Parameters**:
 - table (string, required): Fully qualified table name (database.schema.table)
@@ -574,9 +547,9 @@ Purpose: Retrieve full schema details for a specific table (called by external M
 - primary_key, foreign_keys, indexes, related_tables
 - tokens_used
 
-### 6.3 Function: get_join_path
+### 6.3 Tool: get_join_path
 
-Purpose: Find the join path between two tables (called by external MCP tools)
+Purpose: Find the join path between two tables
 
 **Input Parameters**:
 - source_table (string, required): Starting table (database.schema.table)
@@ -597,9 +570,9 @@ Purpose: Find the join path between two tables (called by external MCP tools)
 - sql_snippet
 - tokens_used
 
-### 6.4 Function: get_domain_overview
+### 6.4 Tool: get_domain_overview
 
-Purpose: Get summary of all tables in a business domain (called by external MCP tools)
+Purpose: Get summary of all tables in a business domain
 
 **Input Parameters**:
 - domain (string, required): Domain name
@@ -619,9 +592,9 @@ Purpose: Get summary of all tables in a business domain (called by external MCP 
 - er_diagram, common_joins
 - tokens_used
 
-### 6.5 Function: list_domains
+### 6.5 Tool: list_domains
 
-Purpose: List all available business domains (called by external MCP tools)
+Purpose: List all available business domains
 
 **Input Parameters**:
 - database (string, optional): Filter to specific database
@@ -630,9 +603,9 @@ Purpose: List all available business domains (called by external MCP tools)
 - domains: Array with name, description, table_count, databases
 - tokens_used
 
-### 6.6 Function: get_common_relationships
+### 6.6 Tool: get_common_relationships
 
-Purpose: Retrieve frequently used join patterns (called by external MCP tools)
+Purpose: Retrieve frequently used join patterns
 
 **Input Parameters**:
 - database (string, optional): Filter to specific database
@@ -960,13 +933,13 @@ ROW_COUNT in INFORMATION_SCHEMA.TABLES is maintained by Snowflake and is accurat
 
 **Prompt Loading**: Templates loaded from /prompts directory at runtime
 
-### 10.5 External MCP Integration
+### 10.5 Noah's Company MCP Integration
 
-**Integration Type**: Function exports for external MCP to call
+**Integration Type**: Tool provider registration
 
-**Communication**: External MCP repo implements MCP tools that call this repo's retrieval functions
+**Communication**: MCP protocol over stdio or HTTP
 
-**Tool Registration**: MCP tools are implemented in separate repository (Noah's Company MCP)
+**Tool Registration**: Export tool definitions, company MCP imports and registers
 
 ---
 

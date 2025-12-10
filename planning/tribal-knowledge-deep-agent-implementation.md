@@ -127,19 +127,15 @@ Based on our research synthesis, we adopt these key principles:
 ┌─────────────────┐
 │ Planner:        │
 │ Schema Analyzer │──────────────────────────────────────┐
-│                 │                                      │
-│ - Extract       │                                      │
-│   metadata      │                                      │
-│   for tables    │                                      │
 └────────┬────────┘                                      │
          │                                               │
          ▼                                               ▼
 ┌─────────────────┐                           ┌─────────────────┐
 │ documentation-  │                           │ Prompt:         │
 │ plan.json       │                           │ domain-         │
-│ (with metadata) │                           │ inference.md    │
+│                 │                           │ inference.md    │
 └────────┬────────┘                           └─────────────────┘
-         │ plan input (includes metadata)
+         │ plan input
          ▼
 ┌─────────────────┐
 │ Agent 1:        │
@@ -147,30 +143,23 @@ Based on our research synthesis, we adopt these key principles:
 └────────┬────────┘                                      │
          │                                               │
          │ spawns sub-agents                             ▼
-         │ (passes metadata from plan)                  │
          ▼                                    ┌─────────────────┐
 ┌─────────────────┐                           │ Prompts:        │
 │ Sub-agents:     │                           │ - column-       │
 │ ┌─────────────┐ │                           │   description   │
 │ │TableDoc     │ │                           │ - table-        │
-│ │(receives    │ │                           │   description   │
-│ │ metadata    │ │                           └─────────────────┘
-│ │ from plan)  │ │
-│ │  ┌────────┐ │ │
-│ │  │ColInfer│ │ │
+│ │  ┌────────┐ │ │                           │   description   │
+│ │  │ColInfer│ │ │                           └─────────────────┘
 │ │  └────────┘ │ │
 │ └─────────────┘ │
 └────────┬────────┘
          │ returns summaries
-         │ outputs: .md + .json
          ▼
 ┌─────────────────┐                           ┌─────────────────┐
 │ Filesystem      │                           │ Progress State  │
 │ /docs/          │                           │ documenter-     │
 │  ├── tables/    │                           │ progress.json   │
-│  │   ├── *.md   │                           └─────────────────┘
-│  │   └── *.json │ (for planner)
-│  ├── domains/   │
+│  ├── domains/   │                           └─────────────────┘
 │  └── schemas/   │
 └────────┬────────┘
          │ file paths
@@ -280,34 +269,26 @@ Step 3: Analyze Relationships
 - Build adjacency graph of table references
 - Identify clusters of related tables
 
-Step 4: Extract Table Metadata
-- For each table, query columns from information_schema
-- Query primary key constraints
-- Query foreign key constraints with referenced tables
-- Query index definitions
-- Get approximate row count
-- Store all metadata for each table
-
-Step 5: Infer Domains
+Step 4: Infer Domains
 - Load domain-inference.md prompt template
 - Format prompt with table list and relationship graph
 - Call LLM to group tables into business domains
 - Parse JSON response with domain assignments
 
-Step 6: Estimate Complexity
+Step 5: Estimate Complexity
 - Simple: Less than 50 tables
 - Moderate: 50-200 tables
 - Complex: More than 200 tables
 - Calculate estimated time based on table count
 
-Step 7: Prioritize Tables
+Step 6: Prioritize Tables
 - Priority 1 (Core): Tables with many incoming FKs, central entities
 - Priority 2 (Standard): Normal tables with some relationships
 - Priority 3 (System): Audit logs, migrations, config tables
 
-Step 8: Write Plan
+Step 7: Write Plan
 - Output documentation-plan.json
-- Include all analysis results and extracted metadata
+- Include all analysis results
 - Ready for user review
 
 ### 3.4 Output: documentation-plan.json
@@ -330,25 +311,6 @@ Structure:
     - row_count_approx: Estimated rows
     - incoming_fks: Count of tables referencing this one
     - outgoing_fks: Count of tables this references
-    - metadata: Complete table metadata object
-      - columns: Array of column objects
-        - name: Column name
-        - data_type: SQL data type
-        - is_nullable: YES or NO
-        - column_default: Default value or null
-        - ordinal_position: Column order
-        - comment: Existing database comment or null
-      - primary_key: Array of primary key column names
-      - foreign_keys: Array of foreign key objects
-        - constraint_name: FK constraint name
-        - column_name: Source column
-        - referenced_table: Fully qualified referenced table
-        - referenced_column: Referenced column name
-      - indexes: Array of index objects
-        - index_name: Index name
-        - columns: Array of column names in index
-        - is_unique: Boolean
-        - index_definition: Full CREATE INDEX statement
 - summary:
   - total_tables: Sum across all databases
   - total_estimated_minutes: Overall time estimate
@@ -371,7 +333,7 @@ After plan generation, the user should:
 
 ### 4.1 Purpose
 
-Executes the documentation plan using sub-agents. The Planner has already iterated through all tables and extracted complete metadata. For each table entry in the plan, spawns a TableDocumenter sub-agent that receives complete metadata from the plan (no extraction needed), samples data, and generates both markdown (human-readable) and JSON outputs. The parent Documenter coordinates progress and collects summaries.
+Executes the documentation plan using sub-agents. For each table in the plan, spawns a TableDocumenter sub-agent that handles metadata extraction, sampling, and markdown generation. The parent Documenter coordinates progress and collects summaries.
 
 ### 4.2 Inputs
 
@@ -388,8 +350,7 @@ Executes the documentation plan using sub-agents. The Planner has already iterat
 │   ├── {db_name}/
 │   │   ├── README.md               # Database overview
 │   │   ├── tables/
-│   │   │   ├── {schema}.{table}.md # Per-table documentation (human-readable)
-│   │   │   ├── {schema}.{table}.json # Per-table JSON output (for planner)
+│   │   │   ├── {schema}.{table}.md # Per-table documentation
 │   │   │   └── ...
 │   │   ├── domains/
 │   │   │   ├── {domain_name}.md    # Domain grouping docs
@@ -413,14 +374,11 @@ Step 2: Initialize Progress
 - Create or load documenter-progress.json
 - Set status to "running"
 
-Step 3: Spawn Sub-agents for Each Plan Entry
-- The Planner has already iterated through all tables and extracted complete metadata
-- For each table entry in plan.tables:
-  - Check if already documented (checkpoint)
-  - If not, spawn TableDocumenter sub-agent with complete metadata from plan
-  - Sub-agent receives metadata (no extraction needed), samples data, generates docs
-  - Receive summary from sub-agent
-  - Update progress checkpoint
+Step 3: For Each Table in Plan
+- Check if already documented (checkpoint)
+- If not, spawn TableDocumenter sub-agent
+- Receive summary from sub-agent
+- Update progress checkpoint
 
 Step 4: Generate Aggregate Outputs
 - Create catalog-summary.md from all summaries
@@ -495,18 +453,18 @@ documenter-progress.json structure:
 **Lifecycle**: Created per table, destroyed after returning summary
 
 **Inputs**:
-- Table metadata from plan (complete metadata object including columns, keys, indexes)
-  - Note: Planner already extracted all metadata, no need to query information_schema
-- Database connection (shared, for sampling data only)
+- Table metadata from plan (name, domain, priority)
+- Database connection (shared)
 - Prompt templates (column-description.md, table-description.md)
 
 **Processing Steps**:
 
-Step 1: Receive Metadata from Plan
-- Receive complete table metadata object from documentation-plan.json
-- Planner has already extracted all metadata (columns, keys, indexes, relationships)
-- Validate metadata structure
-- No need to query information_schema - all data comes from plan
+Step 1: Extract Metadata
+- Query columns from information_schema
+- Query primary key constraints
+- Query foreign key constraints
+- Query index definitions
+- Get approximate row count
 
 Step 2: Sample Data
 - Execute sampling query (100 rows max)
@@ -526,18 +484,14 @@ Step 4: Generate Table Description
 - Parse response
 
 Step 5: Assemble Documentation
-- Combine all sections into markdown (human-readable)
-- Generate JSON output for planner consumption
-  - Include all metadata, column descriptions, table description
-  - Structured format for programmatic use
-- Generate JSON Schema file (for schema validation)
-- Generate YAML semantic model (for Cortex Analyst compatibility)
+- Combine all sections into markdown
+- Generate JSON Schema file
+- Generate YAML semantic model
 
 Step 6: Write Files
-- Write markdown to /docs/databases/{db}/tables/{schema}.{table}.md
-- Write JSON to /docs/databases/{db}/tables/{schema}.{table}.json (for planner)
-- Write JSON Schema to /docs/databases/{db}/schemas/{schema}.{table}.json
-- Write YAML to /docs/databases/{db}/schemas/{schema}.{table}.yaml
+- Write markdown to /docs/databases/{db}/tables/
+- Write JSON to /docs/databases/{db}/schemas/
+- Write YAML to /docs/databases/{db}/schemas/
 
 Step 7: Return Summary
 - Return brief summary to parent (table name, description, column count)
@@ -929,13 +883,13 @@ The indexer creates a hybrid search capability:
 
 ---
 
-## 8. Agent 3: Index Retrieval
+## 8. Agent 3: Index Retrieval / MCP
 
 ### 8.1 Purpose
 
-Provides retrieval logic for indexed documentation. MCP tools are implemented in a separate repository (Noah's Company MCP). This agent provides the search and retrieval functions that the external MCP calls. External agents query the MCP tools, which in turn call this agent's retrieval functions to get relevant database context for their SQL generation tasks.
+Exposes the indexed documentation via MCP tools that get installed into Noah's Company MCP. External agents query these tools to get relevant database context for their SQL generation tasks.
 
-### 8.2 Retrieval Functions (Called by External MCP)
+### 8.2 MCP Tools
 
 **search_tables**: Find tables relevant to a natural language query
 - Input: query, optional database/domain filter, limit
