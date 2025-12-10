@@ -42,3 +42,4 @@ tmp/
 temp/
 *.tmp
 
+.cursor/
