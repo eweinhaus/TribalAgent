@@ -1,0 +1,12 @@
+databases:
+  - name: snowflake_production
+    type: snowflake
+    connection_config: '{"account":"nsfybxh-akc83312","username":"stealthagent","password":"9867g7ZugNa9qTr","region":"us-west-2"}'
+    schemas: []
+    exclude_tables: []
+
+  - name: postgres_production
+    type: postgres
+    connection_string: "postgresql://postgres.ubfnjrsqfohuydzlmmvd:aitribalknowledge01@aws-0-us-west-2.pooler.supabase.com:5432/postgres"
+    schemas: []
+    exclude_tables: []
