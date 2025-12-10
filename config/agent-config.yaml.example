@@ -1,0 +1,35 @@
+# Agent Behavior Configuration
+# Copy this file to agent-config.yaml and customize as needed
+
+planner:
+  enabled: true
+  domain_inference: true
+  max_tables_per_database: 1000
+
+documenter:
+  concurrency: 5
+  sample_timeout_ms: 5000
+  llm_model: claude-sonnet-4
+  checkpoint_interval: 10
+  use_sub_agents: true
+
+indexer:
+  batch_size: 50
+  embedding_model: text-embedding-3-small
+  checkpoint_interval: 100
+
+retrieval:
+  default_limit: 5
+  max_limit: 20
+  context_budgets:
+    simple: 750
+    moderate: 1500
+    complex: 3000
+  rrf_k: 60
+  use_query_understanding: false
+  search_weights:
+    table: 1.5
+    relationship: 1.2
+    column: 1.0
+    domain: 1.0
+

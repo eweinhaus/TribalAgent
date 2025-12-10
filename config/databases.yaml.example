@@ -1,0 +1,23 @@
+# Database Catalog Configuration
+# Copy this file to databases.yaml and configure your databases
+
+databases:
+  - name: production_postgres
+    type: postgres
+    connection_env: POSTGRES_PRODUCTION
+    schemas:
+      - public
+      - analytics
+    exclude_tables:
+      - "*.migrations"
+      - "*.audit_log"
+
+  - name: analytics_snowflake
+    type: snowflake
+    connection_env: SNOWFLAKE_ANALYTICS
+    schemas:
+      - ANALYTICS
+      - RAW
+    exclude_tables:
+      - "*.TEMP_*"
+
