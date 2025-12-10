@@ -49,15 +49,15 @@ Build a deep agent system that automatically documents database schemas, indexes
 │                                                                             │
 │                             ┌──────────────┐                               │
 │                             │   AGENT 3    │                               │
-│                             │   Retrieval  │                               │
-│                             │   (MCP calls)│                               │
+│                             │   Index      │                               │
+│                             │  Retrieval   │                               │
 │                             └──────────────┘                               │
 │                                    │                                       │
 │                                    ▼                                       │
 │                             ┌──────────────┐                               │
-│                             │  External    │                               │
-│                             │  MCP Repo   │                               │
-│                             │  (separate) │                               │
+│                             │  MCP Server  │                               │
+│                             │  (Tools for  │                               │
+│                             │   Noah's MCP)│                               │
 │                             └──────────────┘                               │
 │                                                                             │
 │  ┌──────────────────────────────────────────────────────────────────────┐  │
@@ -98,10 +98,10 @@ Build a deep agent system that automatically documents database schemas, indexes
 │   ┌──────────────────────────────────────────────────────────────────┐     │
 │   │                     PLANNER: SCHEMA ANALYZER                     │     │
 │   │                                                                  │     │
-│   │  ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐      │     │
-│   │  │ Connect │───▶│ Count   │───▶│ Extract │───▶│ Detect  │───▶│ Create  │      │     │
-│   │  │ to DBs  │    │ Tables  │    │Metadata │    │ Domains │    │  Plan   │      │     │
-│   │  └─────────┘    └─────────┘    └─────────┘    └─────────┘    └─────────┘      │     │
+│   │  ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐      │     │
+│   │  │ Connect │───▶│ Count   │───▶│ Detect  │───▶│ Create  │      │     │
+│   │  │ to DBs  │    │ Tables  │    │ Domains │    │  Plan   │      │     │
+│   │  └─────────┘    └─────────┘    └─────────┘    └─────────┘      │     │
 │   └──────────────────────────────────────────────────────────────────┘     │
 │                                      │                                      │
 │                                      ▼                                      │
@@ -112,15 +112,13 @@ Build a deep agent system that automatically documents database schemas, indexes
 │   │                     AGENT 1: DOCUMENTER                          │     │
 │   │                                                                  │     │
 │   │  ┌─────────────────────────────────────────────────────────┐    │     │
-│   │  │  For each table entry in plan.tables:                    │    │     │
+│   │  │  FOR EACH table IN plan.tables:                         │    │     │
 │   │  │    ┌─────────────────────────────────────────────────┐  │    │     │
 │   │  │    │  SUB-AGENT: TableDocumenter                     │  │    │     │
-│   │  │    │  - Receive complete metadata from plan          │  │    │     │
-│   │  │    │    (Planner already extracted all metadata)      │  │    │     │
-│   │  │    │  - Sample data from table                       │  │    │     │
+│   │  │    │  - Extract metadata                             │  │    │     │
+│   │  │    │  - Sample data                                  │  │    │     │
 │   │  │    │  - Spawn ColumnInferencer for each column       │  │    │     │
-│   │  │    │  - Generate markdown (human-readable)           │  │    │     │
-│   │  │    │  - Generate JSON output                          │  │    │     │
+│   │  │    │  - Generate markdown                            │  │    │     │
 │   │  │    │  - Return summary to parent                     │  │    │     │
 │   │  │    └─────────────────────────────────────────────────┘  │    │     │
 │   │  └─────────────────────────────────────────────────────────┘    │     │
