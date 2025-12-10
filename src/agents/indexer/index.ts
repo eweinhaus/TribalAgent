@@ -9,7 +9,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { z } from 'zod';
 import { logger } from '../../utils/logger.js';
-import { Database } from 'better-sqlite3';
+import Database, { Database as DatabaseType } from 'better-sqlite3';
 
 // Progress tracking schema
 const IndexerProgressSchema = z.object({
@@ -160,7 +160,7 @@ function parseDocument(content: string, filePath: string): any {
 /**
  * Extract metadata from file path
  */
-function extractFromPath(filePath: string, type: string): string | null {
+function extractFromPath(_filePath: string, _type: string): string | null {
   // TODO: Implement path parsing logic
   // For now, return null
   return null;
@@ -169,7 +169,7 @@ function extractFromPath(filePath: string, type: string): string | null {
 /**
  * Extract keywords from document content
  */
-function extractKeywords(docData: any): string[] {
+function extractKeywords(_docData: any): string[] {
   // TODO: Implement keyword extraction
   // For now, return empty array
   return [];
@@ -178,7 +178,7 @@ function extractKeywords(docData: any): string[] {
 /**
  * Generate embedding for document content
  */
-async function generateEmbedding(content: string): Promise<Buffer> {
+async function generateEmbedding(_content: string): Promise<Buffer> {
   // TODO: Implement OpenAI embedding generation
   // For now, return empty buffer
   return Buffer.alloc(1536 * 4); // 1536 dimensions * 4 bytes per float
@@ -187,7 +187,7 @@ async function generateEmbedding(content: string): Promise<Buffer> {
 /**
  * Initialize SQLite database schema
  */
-async function initializeDatabase(db: Database): Promise<void> {
+async function initializeDatabase(db: DatabaseType): Promise<void> {
   // Documents table
   db.exec(`
     CREATE TABLE IF NOT EXISTS documents (
@@ -278,7 +278,7 @@ async function initializeDatabase(db: Database): Promise<void> {
 /**
  * Insert document into database
  */
-async function insertDocument(db: Database, docData: any): Promise<void> {
+async function insertDocument(db: DatabaseType, docData: any): Promise<void> {
   const insertDoc = db.prepare(`
     INSERT INTO documents (
       doc_type, database_name, schema_name, table_name, column_name,
@@ -309,14 +309,14 @@ async function insertDocument(db: Database, docData: any): Promise<void> {
   insertVec.run(result.lastInsertRowid, docData.embedding);
 
   // Update FTS index
-  db.exec('INSERT INTO documents_fts(rowid, content, summary, keywords) VALUES (?, ?, ?, ?)',
-    result.lastInsertRowid, docData.content, docData.summary, docData.keywords);
+  const ftsStmt = db.prepare('INSERT INTO documents_fts(rowid, content, summary, keywords) VALUES (?, ?, ?, ?)');
+  ftsStmt.run(result.lastInsertRowid, docData.content, docData.summary, docData.keywords);
 }
 
 /**
  * Build relationships index from existing documents
  */
-async function buildRelationshipsIndex(db: Database): Promise<void> {
+async function buildRelationshipsIndex(_db: DatabaseType): Promise<void> {
   // TODO: Implement relationship extraction and indexing
   logger.debug('Building relationships index (not yet implemented)');
 }
@@ -324,7 +324,7 @@ async function buildRelationshipsIndex(db: Database): Promise<void> {
 /**
  * Optimize database after indexing
  */
-async function optimizeDatabase(db: Database): Promise<void> {
+async function optimizeDatabase(db: DatabaseType): Promise<void> {
   logger.debug('Optimizing database...');
 
   // Optimize FTS5

@@ -161,7 +161,7 @@ export class HybridSearch {
   /**
    * Generate embedding for query
    */
-  private async generateQueryEmbedding(query: string): Promise<Buffer> {
+  private async generateQueryEmbedding(_query: string): Promise<Buffer> {
     // TODO: Implement OpenAI embedding generation
     // For now, return zero vector
     return Buffer.alloc(1536 * 4); // 1536 dimensions * 4 bytes per float

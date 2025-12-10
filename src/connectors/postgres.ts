@@ -91,7 +91,7 @@ export class PostgresConnector implements DatabaseConnector {
     }
   }
 
-  async getRelationships(tableMetadata: any[]): Promise<any[]> {
+  async getRelationships(_tableMetadata: any[]): Promise<any[]> {
     if (!this.client) {
       throw new Error('Not connected to database');
     }

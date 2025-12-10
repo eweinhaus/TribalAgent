@@ -2,17 +2,16 @@
  * Agent 3: Index Retrieval
  *
  * Handles search queries and performs hybrid search combining FTS5 and vector similarity.
- * Implements MCP tools that external agents can call for context retrieval.
+ * Provides functions for external MCP tools to call for context retrieval.
  */
 
 import { promises as fs } from 'fs';
 import path from 'path';
 import { z } from 'zod';
-import { Database } from 'better-sqlite3';
-import { logger } from '../../utils/logger.js';
+import Database, { Database as DatabaseType } from 'better-sqlite3';
 import { HybridSearch } from '../../search/hybrid-search.js';
 
-// MCP tool function signatures
+// Function signatures for external MCP tool consumption
 export interface SearchTablesParams {
   query: string;
   database?: string;
@@ -124,7 +123,7 @@ const GetCommonRelationshipsResponseSchema = z.object({
   tokens_used: z.number(),
 });
 
-// MCP Tool Implementations
+// Retrieval Function Implementations
 
 /**
  * Search for tables using natural language query
@@ -266,7 +265,7 @@ export async function getCommonRelationships(params: GetCommonRelationshipsParam
 
 // Helper functions
 
-async function getDatabaseConnection(): Promise<Database> {
+async function getDatabaseConnection(): Promise<DatabaseType> {
   const dbPath = path.join(process.cwd(), 'data', 'tribal-knowledge.db');
   const exists = await fs.access(dbPath).then(() => true).catch(() => false);
 
@@ -302,7 +301,7 @@ function parseTableIdentifier(tableId: string): any {
   };
 }
 
-async function loadTableSchema(db: Database, tableId: any, includeSamples?: boolean): Promise<any> {
+async function loadTableSchema(_db: DatabaseType, tableId: any, _includeSamples?: boolean): Promise<any> {
   // TODO: Implement table schema loading from database
   // For now, return mock data
   return {
@@ -319,7 +318,7 @@ async function loadTableSchema(db: Database, tableId: any, includeSamples?: bool
   };
 }
 
-async function findJoinPath(db: Database, sourceId: any, targetId: any, maxHops: number): Promise<any> {
+async function findJoinPath(_db: DatabaseType, _sourceId: any, _targetId: any, _maxHops: number): Promise<any> {
   // TODO: Implement join path finding using relationship graph
   // For now, return mock data
   return {
@@ -330,20 +329,20 @@ async function findJoinPath(db: Database, sourceId: any, targetId: any, maxHops:
   };
 }
 
-async function loadDomainOverview(db: Database, domain: string, database?: string): Promise<any> {
+async function loadDomainOverview(_db: DatabaseType, domain: string, _database?: string): Promise<any> {
   // TODO: Implement domain overview loading
   // For now, return mock data
   return {
     domain,
     description: `Tables related to ${domain}`,
-    databases: [database || 'default'],
+    databases: [_database || 'default'],
     tables: [],
     er_diagram: '',
     common_joins: [],
   };
 }
 
-async function loadDomainsList(db: Database, database?: string): Promise<any[]> {
+async function loadDomainsList(_db: DatabaseType, _database?: string): Promise<any[]> {
   // TODO: Implement domains list loading
   // For now, return mock data
   return [
@@ -356,13 +355,13 @@ async function loadDomainsList(db: Database, database?: string): Promise<any[]> 
   ];
 }
 
-async function loadCommonRelationships(db: Database, database?: string, domain?: string, limit?: number): Promise<any[]> {
+async function loadCommonRelationships(_db: DatabaseType, _database?: string, _domain?: string, _limit?: number): Promise<any[]> {
   // TODO: Implement common relationships loading
   // For now, return mock data
   return [];
 }
 
-async function compressResults(results: any[], tokenBudget: number): Promise<{ results: any[], tokensUsed: number }> {
+async function compressResults(results: any[], _tokenBudget: number): Promise<{ results: any[], tokensUsed: number }> {
   // TODO: Implement result compression to fit token budget
   // For now, return all results
   return {

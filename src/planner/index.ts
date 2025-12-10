@@ -46,7 +46,6 @@ const DocumentationPlanSchema = z.object({
   complexity: z.enum(['simple', 'moderate', 'complex']),
 });
 
-type PlannerConfig = z.infer<typeof PlannerConfigSchema>;
 type DocumentationPlan = z.infer<typeof DocumentationPlanSchema>;
 
 export async function runPlanner(): Promise<void> {
@@ -135,7 +134,7 @@ export async function runPlanner(): Promise<void> {
  */
 async function detectDomains(
   tableMetadata: any[],
-  relationships: any[]
+  _relationships: any[]
 ): Promise<Record<string, string[]>> {
   // TODO: Implement domain inference using LLM
   // For now, return a simple grouping by table prefix

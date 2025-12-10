@@ -44,7 +44,7 @@ This is a placeholder response. In the real implementation, this would call the 
 /**
  * Generate embeddings using OpenAI
  */
-export async function generateEmbeddings(texts: string[], model: string = 'text-embedding-3-small'): Promise<number[][]> {
+export async function generateEmbeddings(texts: string[], _model: string = 'text-embedding-3-small'): Promise<number[][]> {
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
@@ -70,7 +70,7 @@ export async function callLLM(
     timeout?: number;
   } = {}
 ): Promise<string> {
-  const { maxRetries = 3, retryDelay = 1000, timeout = 30000 } = options;
+  const { maxRetries = 3, retryDelay = 1000, timeout: _timeout = 30000 } = options;
 
   let lastError: Error | null = null;
 

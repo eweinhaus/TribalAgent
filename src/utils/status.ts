@@ -33,10 +33,10 @@ export async function showStatus(): Promise<void> {
     console.log('║ Indexing:                                                    ║');
     await checkIndexingStatus();
 
-    // MCP status
+    // Retrieval status
     console.log('║                                                              ║');
-    console.log('║ MCP Server:                                                  ║');
-    await checkMCPStatus();
+    console.log('║ Retrieval Functions:                                         ║');
+    await checkRetrievalStatus();
 
     console.log('║                                                              ║');
     console.log('╚══════════════════════════════════════════════════════════════╝');
@@ -174,13 +174,13 @@ async function checkIndexingStatus(): Promise<void> {
   }
 }
 
-async function checkMCPStatus(): Promise<void> {
-  // For now, just show that MCP is ready when index exists
+async function checkRetrievalStatus(): Promise<void> {
+  // Check that retrieval functions are available for external MCP consumption
   try {
     const dbPath = path.join(process.cwd(), 'data', 'tribal-knowledge.db');
     await fs.access(dbPath);
-    console.log('║   ✓ Ready to serve (database available)                      ║');
+    console.log('║   ✓ Retrieval functions ready (database available)          ║');
   } catch {
-    console.log('║   ❌ Not ready to serve (database missing)                   ║');
+    console.log('║   ❌ Retrieval functions not ready (database missing)       ║');
   }
 }

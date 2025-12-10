@@ -19,7 +19,7 @@ export class SnowflakeConnector implements DatabaseConnector {
 
         this.connection = snowflake.createConnection(config);
 
-        this.connection.connect((err, conn) => {
+        this.connection.connect((err, _conn) => {
           if (err) {
             logger.error('Failed to connect to Snowflake', err);
             reject(err);
@@ -124,7 +124,7 @@ export class SnowflakeConnector implements DatabaseConnector {
     }
   }
 
-  async getRelationships(tableMetadata: any[]): Promise<any[]> {
+  async getRelationships(_tableMetadata: any[]): Promise<any[]> {
     if (!this.connection) {
       throw new Error('Not connected to database');
     }
@@ -180,7 +180,7 @@ export class SnowflakeConnector implements DatabaseConnector {
 
       this.connection.execute({
         sqlText: sql,
-        complete: (err, stmt, rows) => {
+        complete: (err, _stmt, rows) => {
           if (err) {
             reject(err);
           } else {

@@ -66,7 +66,7 @@ program
     }
   });
 
-// Note: MCP server is implemented in separate repository (Noah's Company MCP)
+// Note: MCP integration is implemented in separate repository (Noah's Company MCP)
 // This repository provides retrieval functions that external MCP calls
 
 // Status command

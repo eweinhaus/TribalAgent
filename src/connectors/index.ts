@@ -5,8 +5,6 @@
  * Currently supports PostgreSQL and Snowflake.
  */
 
-import { logger } from '../utils/logger.js';
-
 // Database connector interface
 export interface DatabaseConnector {
   connect(connectionString: string): Promise<void>;
