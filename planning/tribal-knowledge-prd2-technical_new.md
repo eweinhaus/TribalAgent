@@ -104,10 +104,9 @@ tribal-knowledge/
 │   │   ├── documenter/          # Agent 1 modules
 │   │   │   ├── sub-agents/      # TableDocumenter, ColumnInferencer (NEW)
 │   │   ├── indexer/             # Agent 2 modules
-│   │   └── retrieval/           # Agent 3 modules
+│   │   └── retrieval/           # Agent 3 modules (provides functions for external MCP)
 │   ├── connectors/              # Database connection modules
 │   ├── search/                  # Hybrid search implementation
-│   ├── mcp/                     # MCP server and tools
 │   ├── utils/                   # Shared utilities
 │   └── index.ts                 # Main entry point
 ├── config/
