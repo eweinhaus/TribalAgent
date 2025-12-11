@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
-    "plan": "tsx src/planner/index.ts",
+    "plan": "tsx src/cli/plan.ts",
+    "plan:validate": "tsx src/cli/plan-validate.ts",
     "document": "tsx src/agents/documenter/index.ts",
     "index": "tsx src/agents/indexer/index.ts",
     "pipeline": "npm run plan && npm run document && npm run index",
@@ -15,7 +16,8 @@
     "validate-prompts": "tsx src/utils/validate-prompts.ts",
     "test": "vitest",
     "test:watch": "vitest --watch",
-    "test:integration": "vitest --run src/**/__tests__/**/*integration*.test.ts"
+    "test:unit": "vitest run tests/planner/index.test.ts",
+    "test:integration": "docker-compose -f tests/fixtures/docker-compose.test.yml up -d && sleep 5 && vitest run tests/planner/integration.test.ts; docker-compose -f tests/fixtures/docker-compose.test.yml down"
   },
   "keywords": [
     "database",
