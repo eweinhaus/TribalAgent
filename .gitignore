@@ -47,4 +47,4 @@ temp/
 planning/
 
 # Memory Bank
-memory-bank/
+memory-bank/sqlite-vec/
