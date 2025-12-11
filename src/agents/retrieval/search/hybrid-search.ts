@@ -7,6 +7,8 @@
 
 import { Database } from 'better-sqlite3';
 import { logger } from '../../../utils/logger.js';
+import { isSqliteVecAvailable } from '../../indexer/database/init.js';
+import { blobToFloat32Array } from '../../indexer/database/init.js';
 
 export interface SearchOptions {
   query: string;
@@ -208,10 +210,32 @@ export class HybridSearch {
       const results = stmt.all(...params);
 
       // Calculate cosine similarity for each result
-      const scoredResults = results.map((row: any) => ({
-        ...row,
-        similarity: this.cosineSimilarity(embedding, row.embedding),
-      }));
+      // Handle both vec0 (JSON array) and blob fallback formats
+      const queryEmbeddingArray = this.bufferToFloatArray(embedding);
+      
+      const scoredResults = results.map((row: any) => {
+        let rowEmbedding: number[];
+        
+        if (isSqliteVecAvailable()) {
+          // vec0 returns embeddings as JSON array or already parsed
+          if (typeof row.embedding === 'string') {
+            rowEmbedding = JSON.parse(row.embedding);
+          } else if (Array.isArray(row.embedding)) {
+            rowEmbedding = row.embedding;
+          } else {
+            // Fallback: try to parse as blob
+            rowEmbedding = blobToFloat32Array(Buffer.from(row.embedding));
+          }
+        } else {
+          // Blob fallback: convert Buffer to float array
+          rowEmbedding = blobToFloat32Array(Buffer.from(row.embedding));
+        }
+        
+        return {
+          ...row,
+          similarity: this.cosineSimilarityArrays(queryEmbeddingArray, rowEmbedding),
+        };
+      });
 
       // Sort by similarity and take top 50
       return scoredResults
@@ -303,14 +327,10 @@ export class HybridSearch {
   }
 
   /**
-   * Calculate cosine similarity between two vectors
+   * Calculate cosine similarity between two number arrays
    */
-  private cosineSimilarity(vec1: Buffer, vec2: Buffer): number {
-    // Convert buffers to float arrays
-    const float1 = this.bufferToFloatArray(vec1);
-    const float2 = this.bufferToFloatArray(vec2);
-
-    if (float1.length !== float2.length) {
+  private cosineSimilarityArrays(vec1: number[], vec2: number[]): number {
+    if (vec1.length !== vec2.length) {
       return 0;
     }
 
@@ -318,10 +338,10 @@ export class HybridSearch {
     let norm1 = 0;
     let norm2 = 0;
 
-    for (let i = 0; i < float1.length; i++) {
-      dotProduct += float1[i] * float2[i];
-      norm1 += float1[i] * float1[i];
-      norm2 += float2[i] * float2[i];
+    for (let i = 0; i < vec1.length; i++) {
+      dotProduct += vec1[i] * vec2[i];
+      norm1 += vec1[i] * vec1[i];
+      norm2 += vec2[i] * vec2[i];
     }
 
     norm1 = Math.sqrt(norm1);

@@ -17,7 +17,7 @@ import type {
   IndexableFile,
   IndexStats,
 } from './types.js';
-import { float32ArrayToBlob } from './database/init.js';
+import { float32ArrayToBlob, isSqliteVecAvailable } from './database/init.js';
 import { computeSHA256 } from './manifest.js';
 import { generateSummary } from './embeddings.js';
 import { logger } from '../../utils/logger.js';
@@ -358,8 +358,15 @@ export function populateIndex(
         }
         
         if (embedding) {
-          const embeddingBlob = float32ArrayToBlob(embedding);
-          insertVec.run(docId, embeddingBlob);
+          // vec0 virtual table expects JSON array, blob fallback expects BLOB
+          if (isSqliteVecAvailable()) {
+            // Insert as JSON array for vec0 (float[1536])
+            insertVec.run(docId, JSON.stringify(embedding));
+          } else {
+            // Insert as BLOB for fallback storage
+            const embeddingBlob = float32ArrayToBlob(embedding);
+            insertVec.run(docId, embeddingBlob);
+          }
         } else {
           // Remove any stale embedding
           deleteVec.run(docId);
