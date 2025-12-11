@@ -12,6 +12,7 @@ export interface DatabaseConnector {
   getAllTableMetadata(schemas?: string[], excludeTables?: string[]): Promise<any[]>;
   getRelationships(tableMetadata: any[]): Promise<any[]>;
   query(sql: string): Promise<any[]>;
+  getTableMetadata(schema: string, table: string): Promise<any>;
 }
 
 // Connector implementations

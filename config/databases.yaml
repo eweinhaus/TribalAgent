@@ -1,8 +1,9 @@
 databases:
   - name: snowflake_production
     type: snowflake
-    connection_config: '{"account":"nsfybxh-akc83312","username":"stealthagent","password":"9867g7ZugNa9qTr","region":"us-west-2"}'
-    schemas: []
+    connection_config: '{"account":"nsfybxh-akc83312","username":"stealthagent","password":"9867g7ZugNa9qTr","warehouse":"COMPUTE_WH","database":"DABSTEP_DB","region":"us-west-2"}'
+    schemas:
+      - PUBLIC
     exclude_tables: []
 
   - name: postgres_production

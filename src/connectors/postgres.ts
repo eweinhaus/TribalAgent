@@ -158,7 +158,7 @@ export class PostgresConnector implements DatabaseConnector {
   /**
    * Get detailed metadata for a specific table
    */
-  private async getTableMetadata(schema: string, table: string): Promise<any> {
+  public async getTableMetadata(schema: string, table: string): Promise<any> {
     if (!this.client) {
       throw new Error('Not connected to database');
     }

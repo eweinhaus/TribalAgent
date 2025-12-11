@@ -14,7 +14,8 @@
     "status": "tsx src/utils/status.ts",
     "validate-prompts": "tsx src/utils/validate-prompts.ts",
     "test": "vitest",
-    "test:watch": "vitest --watch"
+    "test:watch": "vitest --watch",
+    "test:integration": "vitest --run src/**/__tests__/**/*integration*.test.ts"
   },
   "keywords": [
     "database",
@@ -44,6 +45,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.11.0",
     "@types/pg": "^8.10.0",
+    "dotenv": "^17.2.3",
     "tsx": "^4.7.0",
     "typescript": "^5.3.0",
     "vitest": "^1.2.0"

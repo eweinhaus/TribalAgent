@@ -77,6 +77,7 @@ function validateTemplate(content: string, name: string): void {
 
 /**
  * Extract variable names from template using {{variable}} syntax
+ * Handles edge cases: {{variable}}, {{ variable }}, {{variable_name}}
  */
 function extractVariables(content: string): string[] {
   const variableRegex = /\{\{([^}]+)\}\}/g;
@@ -84,10 +85,17 @@ function extractVariables(content: string): string[] {
 
   let match;
   while ((match = variableRegex.exec(content)) !== null) {
-    variables.add(match[1].trim());
+    // Trim whitespace and add to set
+    const varName = match[1].trim();
+    if (varName) {
+      variables.add(varName);
+    }
   }
 
-  return Array.from(variables);
+  const variableArray = Array.from(variables);
+  logger.debug(`Extracted ${variableArray.length} variables: ${variableArray.join(', ')}`);
+  
+  return variableArray;
 }
 
 /**
@@ -168,4 +176,161 @@ export async function validatePromptTemplates(): Promise<void> {
 export function clearTemplateCache(): void {
   templateCache.clear();
   logger.debug('Template cache cleared');
+}
+
+// =============================================================================
+// TEMPLATE VARIABLE MAPPING FUNCTIONS
+// =============================================================================
+
+/**
+ * Map table metadata to template variables for table-description.md
+ * 
+ * @param tableSpec Table specification from work unit
+ * @param workUnit Work unit containing database info
+ * @param metadata Table metadata (columns, primary_key, foreign_keys, etc.)
+ * @param samples Sample data rows
+ * @returns Record of template variable names to values
+ */
+export function mapTableVariables(
+  tableSpec: {
+    schema_name: string;
+    table_name: string;
+    row_count_approx?: number;
+    column_count?: number;
+    existing_comment?: string;
+  },
+  workUnit: {
+    database: string;
+  },
+  metadata: {
+    columns?: Array<{ name: string }>;
+    primary_key?: string[];
+    foreign_keys?: Array<{ from_column: string; to_table: string; to_column: string }>;
+    referenced_by?: Array<{ from_table: string; from_column: string }>;
+  },
+  samples: any[] = []
+): Record<string, string> {
+  // Format column list
+  const columnList = metadata.columns
+    ? metadata.columns.map((c) => c.name).join(', ')
+    : '';
+
+  // Format primary key
+  const primaryKey = metadata.primary_key && metadata.primary_key.length > 0
+    ? metadata.primary_key.join(', ')
+    : 'None';
+
+  // Format foreign keys (this table references others)
+  const foreignKeys = metadata.foreign_keys && metadata.foreign_keys.length > 0
+    ? metadata.foreign_keys
+        .map((fk) => `${fk.from_column} → ${fk.to_table}.${fk.to_column}`)
+        .join(', ')
+    : 'None';
+
+  // Format referenced by (other tables reference this)
+  const referencedBy = metadata.referenced_by && metadata.referenced_by.length > 0
+    ? metadata.referenced_by
+        .map((ref) => `${ref.from_table}.${ref.from_column}`)
+        .join(', ')
+    : 'None';
+
+  // Format sample row (first row as JSON-like string)
+  let sampleRow = 'No sample data available';
+  if (samples && samples.length > 0 && samples[0]) {
+    try {
+      // Format sample row as JSON-like string, truncate long values
+      const formatted = JSON.stringify(samples[0], (_key, value) => {
+        if (typeof value === 'string' && value.length > 100) {
+          return value.substring(0, 100) + '...';
+        }
+        return value;
+      });
+      sampleRow = formatted;
+    } catch (error) {
+      sampleRow = 'Sample data formatting failed';
+    }
+  }
+
+  return {
+    database: workUnit.database || '',
+    schema: tableSpec.schema_name || '',
+    table: tableSpec.table_name || '',
+    row_count: String(tableSpec.row_count_approx ?? 0),
+    column_count: String(tableSpec.column_count ?? 0),
+    column_list: columnList,
+    primary_key: primaryKey,
+    foreign_keys: foreignKeys,
+    referenced_by: referencedBy,
+    existing_comment: tableSpec.existing_comment || '',
+    sample_row: sampleRow,
+    // sample_values is typically used for columns, but include empty string for table template
+    sample_values: '',
+  };
+}
+
+/**
+ * Map column metadata to template variables for column-description.md
+ * 
+ * @param column Column metadata
+ * @param tableSpec Table specification
+ * @param workUnit Work unit containing database info
+ * @param sampleValues Sample values for this column
+ * @returns Record of template variable names to values
+ */
+export function mapColumnVariables(
+  column: {
+    name: string;
+    data_type?: string;
+    is_nullable?: string;
+    column_default?: string | null;
+    comment?: string | null;
+  },
+  tableSpec: {
+    schema_name: string;
+    table_name: string;
+  },
+  workUnit: {
+    database: string;
+  },
+  sampleValues: any[] = []
+): Record<string, string> {
+  // Format nullable
+  const nullable = column.is_nullable === 'YES' || column.is_nullable === 'yes' ? 'YES' : 'NO';
+
+  // Format default value
+  const defaultValue = column.column_default ?? null;
+  const defaultStr = defaultValue !== null ? String(defaultValue) : 'NULL';
+
+  // Format sample values
+  let sampleValuesStr = 'Sample values not available';
+  if (sampleValues && sampleValues.length > 0) {
+    try {
+      // Take up to 10 sample values, truncate long strings
+      const formatted = sampleValues
+        .slice(0, 10)
+        .map((val) => {
+          if (val === null || val === undefined) {
+            return 'null';
+          }
+          const str = String(val);
+          return str.length > 50 ? str.substring(0, 50) + '...' : str;
+        })
+        .join(', ');
+      sampleValuesStr = formatted || 'Sample values not available';
+    } catch (error) {
+      sampleValuesStr = 'Sample values formatting failed';
+    }
+  }
+
+  return {
+    database: workUnit.database || '',
+    schema: tableSpec.schema_name || '',
+    table: tableSpec.table_name || '',
+    column: column.name || '',
+    data_type: column.data_type || 'unknown',
+    nullable: nullable,
+    default: defaultStr,
+    existing_comment: column.comment || '',
+    sample_values: sampleValuesStr,
+  };
 }
