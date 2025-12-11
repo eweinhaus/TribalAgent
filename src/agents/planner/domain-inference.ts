@@ -119,7 +119,7 @@ async function inferDomainsWithLLM(
     return {
       domains: validation.domains,
       usedLLM: true,
-      tokensUsed: estimateTokens(prompt) + estimateTokens(response),
+      tokensUsed: estimateTokens(prompt) + response.tokens.total,
       durationMs: Date.now() - startTime,
       warnings: validation.warnings,
     };
