@@ -47,4 +47,7 @@ temp/
 planning/
 
 # Memory Bank
-memory-bank/sqlite-vec/
+memory-bank/
+
+# Build artifacts (sqlite-vec extension)
+sqlite-vec/
