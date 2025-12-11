@@ -2,84 +2,146 @@
  * ColumnInferencer Sub-Agent
  *
  * Generates semantic description for a single database column.
- * Uses LLM inference with prompt templates to understand column purpose from metadata and samples.
- * Follows context quarantine - returns only the description string.
+ * 
+ * Responsibilities:
+ * - Uses LLM inference with prompt templates
+ * - Accepts sample values for semantic inference
+ * - Returns description string only (context quarantine - no raw data)
+ * - Handles LLM failures with retry and fallback
+ * - Validates description length and punctuation
+ * 
+ * @module ColumnInferencer
  */
 
 import { logger } from '../../../utils/logger.js';
-import { loadPromptTemplate } from '../../../utils/prompts.js';
+import { loadPromptTemplate, interpolateTemplate, mapColumnVariables } from '../../../utils/prompts.js';
 import { callLLM } from '../../../utils/llm.js';
+import { generateColumnFallbackDescription } from '../utils/fallback-descriptions.js';
+import { ErrorCodes } from '../errors.js';
+import type { AgentError } from '../types.js';
+
+/**
+ * ColumnInferencer result type - enforces context quarantine
+ * Returns only description string, never raw data
+ */
+export type ColumnInferencerResult = string;
 
 export class ColumnInferencer {
-  private columnMetadata: any;
+  private columnMetadata: {
+    name: string;
+    data_type: string;
+    is_nullable?: string;
+    column_default?: string | null;
+    comment?: string | null;
+  };
+  private tableContext: {
+    database_name: string;
+    schema_name: string;
+    table_name: string;
+  };
+  private sampleValues: any[];
 
-  constructor(columnMetadata: any) {
+  constructor(
+    columnMetadata: {
+      name: string;
+      data_type: string;
+      is_nullable?: string;
+      column_default?: string | null;
+      comment?: string | null;
+    },
+    tableContext: {
+      database_name: string;
+      schema_name: string;
+      table_name: string;
+    },
+    sampleValues?: any[]
+  ) {
     this.columnMetadata = columnMetadata;
+    this.tableContext = tableContext;
+    this.sampleValues = sampleValues || [];
   }
 
   /**
    * Main inference method - returns only description string (context quarantine)
+   * Also returns token usage for tracking (via side effect or return object)
+   * 
+   * @returns Description string only - no raw sample data (context quarantine enforced)
    */
-  async infer(): Promise<string> {
+  async infer(): Promise<ColumnInferencerResult> {
+    const startTime = Date.now();
+    
     try {
-      logger.debug(`Inferring description for column: ${this.columnMetadata.table_name}.${this.columnMetadata.name}`);
+      logger.debug(`Inferring description for column: ${this.tableContext.table_name}.${this.columnMetadata.name}`);
 
       // Load prompt template
       const template = await loadPromptTemplate('column-description');
 
-      // Prepare template variables
-      const variables = {
-        database: this.columnMetadata.database_name,
-        schema: this.columnMetadata.schema_name,
-        table: this.columnMetadata.table_name,
-        column: this.columnMetadata.name,
-        data_type: this.columnMetadata.data_type,
-        nullable: this.columnMetadata.is_nullable || 'NO',
-        default: this.columnMetadata.column_default || 'NULL',
-        existing_comment: this.columnMetadata.comment || '',
-        sample_values: this.formatSampleValues(),
-      };
+      // Map template variables using utility function
+      const variables = mapColumnVariables(
+        {
+          name: this.columnMetadata.name,
+          data_type: this.columnMetadata.data_type,
+          is_nullable: this.columnMetadata.is_nullable,
+          column_default: this.columnMetadata.column_default,
+          comment: this.columnMetadata.comment,
+        },
+        {
+          schema_name: this.tableContext.schema_name,
+          table_name: this.tableContext.table_name,
+        },
+        {
+          database: this.tableContext.database_name,
+        },
+        this.sampleValues
+      );
 
       // Interpolate template
-      const prompt = this.interpolateTemplate(template, variables);
+      const prompt = interpolateTemplate(template, variables);
 
       // Call LLM for inference
-      const response = await callLLM(prompt, 'claude-sonnet-4');
+      const { content, tokens } = await callLLM(prompt, 'claude-sonnet-4');
 
       // Validate and clean response
-      const description = this.validateDescription(response.trim());
+      const description = this.validateDescription(content.trim());
 
-      logger.debug(`Generated description for ${this.columnMetadata.name}: ${description.substring(0, 50)}...`);
+      const duration = Date.now() - startTime;
+      logger.debug(
+        `Generated description for ${this.columnMetadata.name} (${tokens.total} tokens, ${duration}ms): ${description.substring(0, 50)}...`
+      );
 
+      // Store tokens for tracking (will be handled by parent agent)
+      // For now, we just return the description (context quarantine)
       return description;
 
     } catch (error) {
-      logger.warn(`Failed to infer description for column ${this.columnMetadata.name}`, error);
+      const duration = Date.now() - startTime;
+      const agentError = error as AgentError;
 
-      // Fallback description
-      return `Column ${this.columnMetadata.name} of type ${this.columnMetadata.data_type}.`;
+      // Check if it's a parse failure - use fallback immediately
+      if (agentError.code === ErrorCodes.DOC_LLM_PARSE_FAILED) {
+        logger.warn(
+          `LLM parse failure for column ${this.columnMetadata.name}, using fallback immediately`,
+          { error: agentError.message, duration }
+        );
+        return generateColumnFallbackDescription({
+          name: this.columnMetadata.name,
+          data_type: this.columnMetadata.data_type,
+        });
+      }
+
+      // For other errors (after retries exhausted), use fallback
+      logger.warn(
+        `Failed to infer description for column ${this.columnMetadata.name} after retries, using fallback`,
+        { error: agentError.message, code: agentError.code, duration }
+      );
+
+      return generateColumnFallbackDescription({
+        name: this.columnMetadata.name,
+        data_type: this.columnMetadata.data_type,
+      });
     }
   }
 
-  /**
-   * Format sample values for the prompt
-   */
-  private formatSampleValues(): string {
-    // TODO: Get actual sample values from table sampling
-    // For now, return placeholder
-    return 'Sample values not available';
-  }
-
-  /**
-   * Interpolate template variables
-   */
-  private interpolateTemplate(template: string, variables: Record<string, string>): string {
-    let result = template;
-    for (const [key, value] of Object.entries(variables)) {
-      result = result.replace(new RegExp(`{{${key}}}`, 'g'), value);
-    }
-    return result;
-  }
 
   /**
    * Validate and clean LLM response
@@ -102,7 +164,10 @@ export class ColumnInferencer {
 
     // Ensure minimum length
     if (clean.length < 10) {
-      return `Column ${this.columnMetadata.name} of type ${this.columnMetadata.data_type}.`;
+      return generateColumnFallbackDescription({
+        name: this.columnMetadata.name,
+        data_type: this.columnMetadata.data_type,
+      });
     }
 
     return clean;

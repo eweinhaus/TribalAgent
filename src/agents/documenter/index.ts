@@ -1,123 +1,258 @@
 /**
- * Agent 1: Database Documenter
+ * Agent 2: Database Documenter
  *
- * Executes documentation plan using sub-agents for table and column documentation.
- * Uses the documentation-plan.json created by the Planner to spawn TableDocumenter
- * sub-agents for each table.
+ * Executes documentation plan using work unit-based processing.
+ * Processes work units sequentially by priority, tracks progress,
+ * and supports checkpoint recovery.
  */
 
-import { promises as fs } from 'fs';
-import path from 'path';
-import { z } from 'zod';
 import { logger } from '../../utils/logger.js';
-import { loadDocumentationPlan } from '../../utils/config.js';
+import { loadAndValidatePlan } from './plan-loader.js';
+import { 
+  saveDocumenterProgress
+} from './progress.js';
+import { shouldResumeFromCheckpoint, computePlanHash } from './recovery.js';
+import { processWorkUnits } from './work-unit-processor.js';
+import { computeOverallStatus } from './status.js';
+import { createAgentError, ErrorCodes } from './errors.js';
+import { generateManifest, writeManifest } from './manifest-generator.js';
+import type {
+  DocumenterProgress,
+  DocumentationPlan,
+  DocumenterStats,
+} from './types.js';
 
-// Progress tracking schema
-const DocumenterProgressSchema = z.object({
-  started_at: z.string(),
-  completed_at: z.string().nullable(),
-  status: z.enum(['running', 'completed', 'failed']),
-  plan_file: z.string(),
-  current_database: z.string().nullable(),
-  current_table: z.string().nullable(),
-  databases: z.array(z.object({
-    name: z.string(),
-    status: z.enum(['pending', 'in_progress', 'completed', 'failed']),
-    tables_total: z.number(),
-    tables_completed: z.number(),
-    error: z.string().nullable(),
-  })),
-});
+/**
+ * Shutdown flag to prevent new work when shutdown is requested
+ */
+let shutdownRequested = false;
 
-type DocumenterProgress = z.infer<typeof DocumenterProgressSchema>;
+/**
+ * Current plan being processed (for shutdown handler)
+ */
+let currentPlan: DocumentationPlan | null = null;
 
+/**
+ * Current progress being tracked (for shutdown handler)
+ */
+let currentProgress: DocumenterProgress | null = null;
+
+/**
+ * Main entry point for documenter agent
+ * 
+ * Orchestrates the documentation process:
+ * 1. Load and validate plan
+ * 2. Check for checkpoint recovery
+ * 3. Process work units sequentially
+ * 4. Update progress and status
+ * 5. Generate manifest
+ */
 export async function runDocumenter(): Promise<void> {
   try {
     logger.info('Starting database documentation phase');
 
-    // Load documentation plan
-    const plan = await loadDocumentationPlan();
-    logger.info(`Loaded plan with ${plan.total_tables} tables across ${plan.databases.length} databases`);
+    // Set up graceful shutdown handlers
+    setupShutdownHandlers();
 
-    // Initialize progress tracking
-    const progress: DocumenterProgress = {
-      started_at: new Date().toISOString(),
-      completed_at: null,
-      status: 'running',
-      plan_file: 'progress/documentation-plan.json',
-      current_database: null,
-      current_table: null,
-      databases: plan.databases.map(db => ({
-        name: db.name,
-        status: 'pending',
-        tables_total: db.table_count,
-        tables_completed: 0,
-        error: null,
-      })),
-    };
+    // Load and validate plan
+    const plan = await loadAndValidatePlan();
+    currentPlan = plan;
+    logger.info('Plan loaded and validated', {
+      workUnits: plan.work_units.length,
+      totalTables: plan.summary.total_tables,
+      complexity: plan.complexity,
+    });
 
-    await saveProgress(progress);
+    // Check for checkpoint recovery
+    const resumeInfo = await shouldResumeFromCheckpoint(plan);
+    
+    let progress: DocumenterProgress;
+    let startIndex: number;
 
-    // Process each database
-    for (const database of plan.databases) {
-      logger.info(`Processing database: ${database.name}`);
-
-      progress.current_database = database.name;
-      const dbProgress = progress.databases.find(db => db.name === database.name)!;
-      dbProgress.status = 'in_progress';
-
-      await saveProgress(progress);
-
-      try {
-        // Process tables in priority order
-        for (const table of database.tables) {
-          logger.info(`Documenting table: ${table.name}`);
-
-          progress.current_table = table.name;
-          await saveProgress(progress);
-
-          // Spawn TableDocumenter sub-agent
-          const { TableDocumenter } = await import('./sub-agents/TableDocumenter.js');
-          const documenter = new TableDocumenter(table.metadata);
-
-          await documenter.document();
-
-          dbProgress.tables_completed++;
-          await saveProgress(progress);
-        }
-
-        dbProgress.status = 'completed';
-
-      } catch (error) {
-        logger.error(`Failed to document database ${database.name}`, error);
-        dbProgress.status = 'failed';
-        dbProgress.error = error instanceof Error ? error.message : String(error);
-        await saveProgress(progress);
-        throw error;
-      }
+    if (resumeInfo) {
+      // Resume from checkpoint
+      logger.info('Resuming from checkpoint');
+      progress = resumeInfo.progress;
+      startIndex = resumeInfo.startFromWorkUnitIndex;
+    } else {
+      // Initialize new progress
+      logger.info('Starting fresh documentation run');
+      progress = initializeProgress(plan);
+      startIndex = 0;
+      await saveDocumenterProgress(progress);
     }
 
-    // Mark overall progress as completed
-    progress.status = 'completed';
+    currentProgress = progress;
+
+    // Process work units
+    try {
+      await processWorkUnits(plan, progress, startIndex, () => shutdownRequested);
+    } catch (error) {
+      // Fatal error during processing
+      logger.error('Fatal error during work unit processing', error);
+      progress.errors.push(
+        createAgentError(
+          ErrorCodes.DOC_WORK_UNIT_FAILED,
+          `Fatal error: ${error instanceof Error ? error.message : String(error)}`,
+          'fatal',
+          false,
+          { error: String(error) }
+        )
+      );
+      progress.status = computeOverallStatus(
+        Object.values(progress.work_units),
+        true // fatal error
+      );
+      progress.completed_at = new Date().toISOString();
+      await saveDocumenterProgress(progress);
+      
+      // Generate manifest even on fatal error (partial status)
+      await generateAndWriteManifest(progress, plan);
+      
+      throw error;
+    }
+
+    // Mark as completed
+    progress.status = computeOverallStatus(
+      Object.values(progress.work_units),
+      false
+    );
     progress.completed_at = new Date().toISOString();
-    progress.current_database = null;
-    progress.current_table = null;
+    await saveDocumenterProgress(progress);
 
-    await saveProgress(progress);
+    logger.info('Database documentation phase completed', {
+      status: progress.status,
+      completedTables: progress.stats.completed_tables,
+      failedTables: progress.stats.failed_tables,
+      workUnitsCompleted: Object.values(progress.work_units)
+        .filter(wu => wu.status === 'completed').length,
+    });
 
-    logger.info('Database documentation phase completed');
+    // Generate manifest on successful completion
+    await generateAndWriteManifest(progress, plan);
 
   } catch (error) {
     logger.error('Documentation phase failed', error);
+    
+    // Try to generate manifest even on failure
+    if (currentProgress && currentPlan) {
+      try {
+        await generateAndWriteManifest(currentProgress, currentPlan);
+      } catch (manifestError) {
+        logger.error('Failed to generate manifest on error', manifestError);
+      }
+    }
+    
     throw error;
+  } finally {
+    // Clean up
+    currentPlan = null;
+    currentProgress = null;
   }
 }
 
 /**
- * Save progress to file for checkpoint recovery
+ * Generate and write manifest
+ * 
+ * @param progress Documenter progress
+ * @param plan Documentation plan
  */
-async function saveProgress(progress: DocumenterProgress): Promise<void> {
-  const progressPath = path.join(process.cwd(), 'progress', 'documenter-progress.json');
-  await fs.mkdir(path.dirname(progressPath), { recursive: true });
-  await fs.writeFile(progressPath, JSON.stringify(progress, null, 2));
+async function generateAndWriteManifest(
+  progress: DocumenterProgress,
+  plan: DocumentationPlan
+): Promise<void> {
+  try {
+    logger.info('Generating documentation manifest');
+    const manifest = await generateManifest(progress, plan);
+    await writeManifest(manifest);
+    logger.info('Manifest generated and written successfully');
+  } catch (error) {
+    // Log error but don't throw - manifest generation failure shouldn't crash documenter
+    // unless it's a write failure (which is already fatal)
+    logger.error('Failed to generate manifest', error);
+    
+    // If it's a write failure, it's already a fatal error, so re-throw
+    if (error instanceof Error && error.message.includes('DOC_MANIFEST_WRITE_FAILED')) {
+      throw error;
+    }
+  }
+}
+
+/**
+ * Set up graceful shutdown handlers
+ */
+function setupShutdownHandlers(): void {
+  const shutdownHandler = async (signal: string) => {
+    logger.info(`Received ${signal}, initiating graceful shutdown`);
+    shutdownRequested = true;
+
+    // Wait a bit for current work to complete (with timeout)
+    await new Promise(resolve => setTimeout(resolve, 5000)); // 5 second grace period
+
+    if (currentProgress && currentPlan) {
+      // Update progress status to 'partial'
+      currentProgress.status = 'partial';
+      currentProgress.completed_at = new Date().toISOString();
+      
+      try {
+        await saveDocumenterProgress(currentProgress);
+        logger.info('Progress saved on shutdown');
+      } catch (error) {
+        logger.error('Failed to save progress on shutdown', error);
+      }
+
+      // Generate manifest
+      try {
+        await generateAndWriteManifest(currentProgress, currentPlan);
+        logger.info('Manifest generated on shutdown');
+      } catch (error) {
+        logger.error('Failed to generate manifest on shutdown', error);
+      }
+    }
+
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', () => shutdownHandler('SIGTERM'));
+  process.on('SIGINT', () => shutdownHandler('SIGINT'));
+}
+
+/**
+ * Initialize new documenter progress
+ * 
+ * @param plan Documentation plan
+ * @returns Initialized progress object
+ */
+function initializeProgress(plan: DocumentationPlan): DocumenterProgress {
+  const now = new Date().toISOString();
+  const planHash = computePlanHash(plan);
+
+  // Calculate total tables from work units
+  const totalTables = plan.work_units.reduce(
+    (sum, wu) => sum + wu.tables.length,
+    0
+  );
+
+  const stats: DocumenterStats = {
+    total_tables: totalTables,
+    completed_tables: 0,
+    failed_tables: 0,
+    skipped_tables: 0,
+    llm_tokens_used: 0,
+    llm_time_ms: 0,
+    db_query_time_ms: 0,
+  };
+
+  return {
+    schema_version: '1.0',
+    started_at: now,
+    completed_at: null,
+    status: 'running',
+    plan_file: 'progress/documentation-plan.json',
+    plan_hash: planHash,
+    work_units: {},
+    stats,
+    last_checkpoint: now,
+    errors: [],
+  };
 }

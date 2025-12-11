@@ -2,102 +2,302 @@
  * TableDocumenter Sub-Agent
  *
  * Handles complete documentation of a single table.
- * Receives complete metadata from the documentation plan (Planner has already extracted it).
- * Samples data, spawns ColumnInferencer sub-agents, and generates final documentation.
+ * 
+ * Responsibilities:
+ * - Extracts table metadata via getTableMetadata()
+ * - Samples data from database (with 5-second timeout)
+ * - Spawns ColumnInferencer sub-agents for each column (sequential processing)
+ * - Generates table description using LLM
+ * - Writes Markdown and JSON documentation files
+ * - Returns summary object only (context quarantine - no raw data)
+ * 
+ * @module TableDocumenter
  */
 
 import { promises as fs } from 'fs';
 import path from 'path';
 import { logger } from '../../../utils/logger.js';
-import { getDatabaseConnector } from '../../../connectors/index.js';
-import { loadPromptTemplate } from '../../../utils/prompts.js';
+import type { DatabaseConnector } from '../../../connectors/index.js';
+import { loadPromptTemplate, interpolateTemplate, mapTableVariables } from '../../../utils/prompts.js';
 import { callLLM } from '../../../utils/llm.js';
+import { generateTableFallbackDescription } from '../utils/fallback-descriptions.js';
+import { createAgentError, ErrorCodes } from '../errors.js';
+import type { AgentError, WorkUnit, TableSpec } from '../types.js';
+
+/**
+ * TableDocumenter result type - enforces context quarantine
+ * Returns summary object with no raw sample data
+ */
+export interface TableDocumenterResult {
+  table: string;
+  schema: string;
+  description: string;
+  column_count: number;
+  output_files: string[];
+}
 
 export class TableDocumenter {
-  private tableMetadata: any;
-  private databaseConnector: any;
+  private tableSpec: TableSpec;
+  private workUnit: WorkUnit;
+  private databaseConnector: DatabaseConnector;
   private docsPath: string;
 
-  constructor(tableMetadata: any) {
-    this.tableMetadata = tableMetadata;
-    this.docsPath = path.join(process.cwd(), 'docs');
-
-    // Initialize database connector for sampling
-    const dbConfig = this.getDatabaseConfig();
-    this.databaseConnector = getDatabaseConnector(dbConfig.type);
+  constructor(
+    tableSpec: TableSpec,
+    workUnit: WorkUnit,
+    connector: DatabaseConnector
+  ) {
+    this.tableSpec = tableSpec;
+    this.workUnit = workUnit;
+    this.databaseConnector = connector;
+    // Use TRIBAL_DOCS_PATH if set, otherwise default to docs/ in cwd
+    this.docsPath = process.env.TRIBAL_DOCS_PATH || path.join(process.cwd(), 'docs');
   }
 
   /**
    * Main documentation method
+   * Returns summary object (context quarantine - no raw data)
+   * 
+   * @returns Summary object with table description and file paths - NO raw sample data
    */
-  async document(): Promise<void> {
-    try {
-      logger.debug(`Documenting table: ${this.tableMetadata.name}`);
+  async document(): Promise<TableDocumenterResult> {
+    const schema = this.tableSpec.schema_name;
+    const table = this.tableSpec.table_name;
+    const fullyQualifiedName = `${schema}.${table}`;
 
-      // Connect to database for sampling
-      await this.databaseConnector.connect(this.getConnectionEnv());
+    try {
+      logger.debug(`Documenting table: ${fullyQualifiedName}`);
+
+      // Extract table metadata via getTableMetadata()
+      let tableMetadata: any;
+      try {
+        tableMetadata = await this.databaseConnector.getTableMetadata(schema, table);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const agentError = createAgentError(
+          ErrorCodes.DOC_TABLE_EXTRACTION_FAILED,
+          `Failed to extract table metadata for ${fullyQualifiedName}: ${errorMessage}`,
+          'error',
+          true,
+          { schema, table, originalError: errorMessage }
+        );
+        logger.error(agentError.message, { code: agentError.code, context: agentError.context });
+        throw agentError;
+      }
 
       // Sample data from table
       const sampleData = await this.sampleTableData();
 
-      // Spawn ColumnInferencer for each column
-      const columnDescriptions = await this.documentColumns();
+      // Spawn ColumnInferencer for each column sequentially
+      const columnDescriptions = await this.documentColumns(tableMetadata.columns, sampleData);
 
       // Generate table description
-      const tableDescription = await this.generateTableDescription(sampleData);
+      const tableDescriptionResult = await this.generateTableDescription(tableMetadata, sampleData);
+      const tableDescription = tableDescriptionResult.description;
+      // TODO: Track tokens and timing in progress system (Phase 7)
 
       // Generate documentation files
-      await this.generateMarkdownDoc(tableDescription, columnDescriptions, sampleData);
-      await this.generateJSONDoc(tableDescription, columnDescriptions, sampleData);
+      // Error isolation: Markdown failure should not prevent JSON write
+      let markdownPath: string | null = null;
+      let jsonPath: string | null = null;
 
-      // Disconnect from database
-      await this.databaseConnector.disconnect();
+      try {
+        markdownPath = await this.generateMarkdownDoc(
+          tableDescription,
+          columnDescriptions,
+          tableMetadata,
+          sampleData
+        );
+      } catch (error) {
+        logger.error(`Markdown generation failed for ${fullyQualifiedName}, continuing with JSON`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        // Continue to JSON generation
+      }
 
-      logger.debug(`Completed documentation for table: ${this.tableMetadata.name}`);
+      try {
+        jsonPath = await this.generateJSONDoc(
+          tableDescription,
+          columnDescriptions,
+          tableMetadata,
+          sampleData
+        );
+      } catch (error) {
+        logger.error(`JSON generation failed for ${fullyQualifiedName}`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        // If both failed, throw error
+        if (!markdownPath) {
+          throw error;
+        }
+      }
 
+      // At least one file must succeed
+      if (!markdownPath && !jsonPath) {
+        throw new Error('Both Markdown and JSON generation failed');
+      }
+
+      logger.debug(`Completed documentation for table: ${fullyQualifiedName}`);
+
+      // Return summary object (context quarantine - no raw data)
+      const outputFiles: string[] = [];
+      if (markdownPath) outputFiles.push(markdownPath);
+      if (jsonPath) outputFiles.push(jsonPath);
+
+      const summary: TableDocumenterResult = {
+        table,
+        schema,
+        description: tableDescription,
+        column_count: tableMetadata.columns?.length || 0,
+        output_files: outputFiles,
+      };
+
+      // Runtime validation: ensure no raw data in summary
+      if ('sample_data' in summary || 'raw_data' in summary) {
+        throw new Error('Context quarantine violation: summary contains raw data');
+      }
+
+      return summary;
     } catch (error) {
-      logger.error(`Failed to document table ${this.tableMetadata.name}`, error);
+      const agentError = error as AgentError;
+      logger.error(`Failed to document table ${fullyQualifiedName}`, {
+        code: agentError.code,
+        message: agentError.message,
+        context: agentError.context,
+      });
       throw error;
     }
   }
 
   /**
    * Sample data from the table for inference
+   * Implements 5-second timeout and proper error handling
    */
   private async sampleTableData(): Promise<any[]> {
+    const timeoutMs = 5000; // 5 seconds
+    const schema = this.tableSpec.schema_name;
+    const table = this.tableSpec.table_name;
+
     try {
-      // Sample up to 100 rows for pattern inference
-      const sampleQuery = `SELECT * FROM ${this.tableMetadata.schema}.${this.tableMetadata.name} LIMIT 100`;
-      const samples = await this.databaseConnector.query(sampleQuery);
-      return samples;
+      // Create timeout promise
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('Query timeout'));
+        }, timeoutMs);
+      });
+
+      // Create query promise
+      const sampleQuery = `SELECT * FROM ${schema}.${table} LIMIT 100`;
+      const queryPromise = this.databaseConnector.query(sampleQuery);
+
+      // Race between query and timeout
+      const samples = await Promise.race([queryPromise, timeoutPromise]);
+
+      // Format sample data
+      return this.formatSampleData(samples as any[]);
     } catch (error) {
-      logger.warn(`Failed to sample data from ${this.tableMetadata.name}`, error);
-      return [];
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      if (errorMessage.includes('timeout') || errorMessage === 'Query timeout') {
+        // Timeout error
+        const agentError = createAgentError(
+          ErrorCodes.DOC_SAMPLING_TIMEOUT,
+          `Sampling query exceeded ${timeoutMs}ms timeout for table ${schema}.${table}`,
+          'warning',
+          true,
+          { schema, table, timeout_ms: timeoutMs }
+        );
+        logger.warn(agentError.message, { code: agentError.code, context: agentError.context });
+        return [];
+      } else {
+        // Other query error
+        const agentError = createAgentError(
+          ErrorCodes.DOC_SAMPLING_FAILED,
+          `Sampling query failed for table ${schema}.${table}: ${errorMessage}`,
+          'warning',
+          true,
+          { schema, table, originalError: errorMessage }
+        );
+        logger.warn(agentError.message, { code: agentError.code, context: agentError.context });
+        return [];
+      }
     }
   }
 
   /**
-   * Spawn ColumnInferencer sub-agents for each column
+   * Format sample data rows for use in prompts and output files
    */
-  private async documentColumns(): Promise<Record<string, string>> {
-    const columnDescriptions: Record<string, string> = {};
+  private formatSampleData(samples: any[]): any[] {
+    return samples.map(row => {
+      const formatted: any = {};
+      for (const [key, value] of Object.entries(row)) {
+        formatted[key] = this.truncateValue(value, 100);
+      }
+      return formatted;
+    });
+  }
 
-    for (const column of this.tableMetadata.columns) {
+  /**
+   * Truncate value if it exceeds max length
+   */
+  private truncateValue(value: any, maxLength: number): any {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    const str = String(value);
+    if (str.length > maxLength) {
+      return str.substring(0, maxLength) + '...';
+    }
+
+    return value;
+  }
+
+  /**
+   * Spawn ColumnInferencer sub-agents for each column sequentially
+   * Processes columns one at a time to avoid token budget complexity
+   */
+  private async documentColumns(
+    columns: any[],
+    sampleData: any[]
+  ): Promise<Record<string, string>> {
+    const columnDescriptions: Record<string, string> = {};
+    const schema = this.tableSpec.schema_name;
+    const table = this.tableSpec.table_name;
+    const database = this.workUnit.database;
+
+    // Process columns sequentially (one at a time)
+    for (const column of columns) {
       try {
+        // Extract sample values for this column from sampled data
+        const sampleValues = sampleData
+          .map(row => row[column.column_name || column.name])
+          .filter(val => val !== null && val !== undefined);
+
         const { ColumnInferencer } = await import('./ColumnInferencer.js');
-        const inferencer = new ColumnInferencer({
-          ...column,
-          table_name: this.tableMetadata.name,
-          schema_name: this.tableMetadata.schema,
-          database_name: this.tableMetadata.database,
-        });
+        const inferencer = new ColumnInferencer(
+          {
+            name: column.column_name || column.name,
+            data_type: column.data_type,
+            is_nullable: column.is_nullable,
+            column_default: column.column_default,
+            comment: column.comment,
+          },
+          {
+            database_name: database,
+            schema_name: schema,
+            table_name: table,
+          },
+          sampleValues
+        );
 
         const description = await inferencer.infer();
-        columnDescriptions[column.name] = description;
-
+        columnDescriptions[column.column_name || column.name] = description;
       } catch (error) {
-        logger.warn(`Failed to document column ${column.name}`, error);
-        columnDescriptions[column.name] = 'Description unavailable';
+        const columnName = column.column_name || column.name;
+        logger.warn(`Failed to document column ${columnName}`, error);
+        // Use fallback description
+        columnDescriptions[columnName] = `Column ${columnName} of type ${column.data_type}.`;
       }
     }
 
@@ -106,138 +306,243 @@ export class TableDocumenter {
 
   /**
    * Generate semantic description for the table
+   * Returns description and token usage info for tracking
    */
-  private async generateTableDescription(sampleData: any[]): Promise<string> {
+  private async generateTableDescription(
+    tableMetadata: any,
+    sampleData: any[]
+  ): Promise<{
+    description: string;
+    tokens: { prompt: number; completion: number; total: number };
+    duration: number;
+  }> {
+    const startTime = Date.now();
+    const schema = this.tableSpec.schema_name;
+    const table = this.tableSpec.table_name;
+    const fullyQualifiedName = `${schema}.${table}`;
+
     try {
       const template = await loadPromptTemplate('table-description');
 
-      const variables = {
-        database: this.tableMetadata.database,
-        schema: this.tableMetadata.schema,
-        table: this.tableMetadata.name,
-        row_count: this.tableMetadata.row_count || 'Unknown',
-        column_list: this.tableMetadata.columns.map((c: any) => c.name).join(', '),
-        primary_key: this.tableMetadata.primary_key?.join(', ') || 'None',
-        foreign_keys: this.formatForeignKeys(),
-        existing_comment: this.tableMetadata.comment || '',
-        sample_row: this.formatSampleRow(sampleData[0]),
+      // Map template variables using utility function
+      const variables = mapTableVariables(
+        {
+          schema_name: schema,
+          table_name: table,
+          row_count_approx: this.tableSpec.row_count_approx,
+          column_count: tableMetadata.columns?.length || 0,
+          existing_comment: this.tableSpec.existing_comment,
+        },
+        {
+          database: this.workUnit.database,
+        },
+        {
+          columns: tableMetadata.columns,
+          primary_key: tableMetadata.primary_key,
+          foreign_keys: tableMetadata.foreign_keys,
+          referenced_by: [], // TODO: Extract from relationships if needed
+        },
+        sampleData
+      );
+
+      const prompt = interpolateTemplate(template, variables);
+      const { content, tokens } = await callLLM(prompt, 'claude-sonnet-4');
+
+      const duration = Date.now() - startTime;
+      logger.debug(
+        `Generated table description for ${fullyQualifiedName} (${tokens.total} tokens, ${duration}ms)`
+      );
+
+      return {
+        description: content.trim(),
+        tokens,
+        duration,
       };
 
-      const prompt = this.interpolateTemplate(template, variables);
-      const response = await callLLM(prompt, 'claude-sonnet-4');
-
-      return response.trim();
-
     } catch (error) {
-      logger.warn(`Failed to generate table description for ${this.tableMetadata.name}`, error);
-      return `Table ${this.tableMetadata.name} contains ${this.tableMetadata.columns.length} columns.`;
+      const duration = Date.now() - startTime;
+      const agentError = error as AgentError;
+
+      // Check if it's a parse failure - use fallback immediately
+      if (agentError.code === ErrorCodes.DOC_LLM_PARSE_FAILED) {
+        logger.warn(
+          `LLM parse failure for table ${fullyQualifiedName}, using fallback immediately`,
+          { error: agentError.message, duration }
+        );
+        return {
+          description: generateTableFallbackDescription({
+            table_name: table,
+            column_count: tableMetadata.columns?.length || 0,
+            row_count_approx: this.tableSpec.row_count_approx,
+          }),
+          tokens: { prompt: 0, completion: 0, total: 0 },
+          duration,
+        };
+      }
+
+      // For other errors (after retries exhausted), use fallback
+      logger.warn(
+        `Failed to generate table description for ${fullyQualifiedName} after retries, using fallback`,
+        { error: agentError.message, code: agentError.code, duration }
+      );
+
+      return {
+        description: generateTableFallbackDescription({
+          table_name: table,
+          column_count: tableMetadata.columns?.length || 0,
+          row_count_approx: this.tableSpec.row_count_approx,
+        }),
+        tokens: { prompt: 0, completion: 0, total: 0 },
+        duration,
+      };
     }
   }
 
   /**
    * Generate Markdown documentation file
+   * Returns file path for summary
    */
   private async generateMarkdownDoc(
     tableDescription: string,
     columnDescriptions: Record<string, string>,
+    tableMetadata: any,
     sampleData: any[]
-  ): Promise<void> {
-    const content = this.buildMarkdownContent(tableDescription, columnDescriptions, sampleData);
-
+  ): Promise<string> {
+    const content = this.buildMarkdownContent(tableDescription, columnDescriptions, tableMetadata, sampleData);
     const filePath = this.getMarkdownFilePath();
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, content);
+
+    try {
+      // Create directory structure
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+
+      // Atomic write: write to temp file, then rename
+      const tempPath = `${filePath}.tmp`;
+      await fs.writeFile(tempPath, content);
+      await fs.rename(tempPath, filePath);
+
+      return filePath;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const agentError = createAgentError(
+        ErrorCodes.DOC_FILE_WRITE_FAILED,
+        `Failed to write Markdown file ${filePath}: ${errorMessage}`,
+        'error',
+        true,
+        { filePath, originalError: errorMessage }
+      );
+
+      // Retry once
+      try {
+        await fs.writeFile(filePath, content);
+        logger.warn(`Retry succeeded for Markdown file ${filePath}`);
+        return filePath;
+      } catch (retryError) {
+        logger.error(agentError.message, { code: agentError.code, context: agentError.context });
+        throw agentError;
+      }
+    }
   }
 
   /**
    * Generate JSON documentation file
+   * Returns file path for summary
    */
   private async generateJSONDoc(
     tableDescription: string,
     columnDescriptions: Record<string, string>,
+    tableMetadata: any,
     sampleData: any[]
-  ): Promise<void> {
+  ): Promise<string> {
+    const schema = this.tableSpec.schema_name;
+    const table = this.tableSpec.table_name;
+
     const jsonData = {
-      table: this.tableMetadata.name,
-      schema: this.tableMetadata.schema,
-      database: this.tableMetadata.database,
+      table,
+      schema,
+      database: this.workUnit.database,
       description: tableDescription,
-      row_count: this.tableMetadata.row_count,
-      columns: this.tableMetadata.columns.map((col: any) => ({
-        name: col.name,
+      row_count: this.tableSpec.row_count_approx,
+      columns: tableMetadata.columns.map((col: any) => ({
+        name: col.column_name || col.name,
         type: col.data_type,
         nullable: col.is_nullable === 'YES',
-        description: columnDescriptions[col.name] || 'No description available',
+        description: columnDescriptions[col.column_name || col.name] || 'No description available',
         default: col.column_default,
       })),
-      primary_key: this.tableMetadata.primary_key,
-      foreign_keys: this.tableMetadata.foreign_keys,
-      indexes: this.tableMetadata.indexes,
+      primary_key: tableMetadata.primary_key,
+      foreign_keys: tableMetadata.foreign_keys,
+      indexes: tableMetadata.indexes,
       sample_data: sampleData.slice(0, 5), // Include up to 5 sample rows
       generated_at: new Date().toISOString(),
     };
 
     const filePath = this.getJSONFilePath();
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(jsonData, null, 2));
+
+    try {
+      // Create directory structure
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+
+      // Atomic write: write to temp file, then rename
+      const tempPath = `${filePath}.tmp`;
+      await fs.writeFile(tempPath, JSON.stringify(jsonData, null, 2));
+      await fs.rename(tempPath, filePath);
+
+      return filePath;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const agentError = createAgentError(
+        ErrorCodes.DOC_FILE_WRITE_FAILED,
+        `Failed to write JSON file ${filePath}: ${errorMessage}`,
+        'error',
+        true,
+        { filePath, originalError: errorMessage }
+      );
+
+      // Retry once
+      try {
+        await fs.writeFile(filePath, JSON.stringify(jsonData, null, 2));
+        logger.warn(`Retry succeeded for JSON file ${filePath}`);
+        return filePath;
+      } catch (retryError) {
+        logger.error(agentError.message, { code: agentError.code, context: agentError.context });
+        throw agentError;
+      }
+    }
   }
 
   // Helper methods
 
-  private getDatabaseConfig(): any {
-    // TODO: Load from configuration
-    return {
-      type: 'postgres', // or 'snowflake'
-      connection_env: 'DATABASE_URL',
-    };
+  /**
+   * Sanitize file name by replacing invalid filesystem characters
+   */
+  private sanitizeFileName(name: string): string {
+    // Don't lowercase - preserve case for schema/table names
+    // Only replace invalid filesystem characters
+    return name.replace(/[\/\\:*?"<>|]/g, '_');
   }
 
-  private getConnectionEnv(): string {
-    return process.env.DATABASE_URL || '';
-  }
-
-  private formatForeignKeys(): string {
-    if (!this.tableMetadata.foreign_keys || this.tableMetadata.foreign_keys.length === 0) {
-      return 'None';
-    }
-
-    return this.tableMetadata.foreign_keys
-      .map((fk: any) => `${fk.column_name} → ${fk.referenced_table}.${fk.referenced_column}`)
-      .join(', ');
-  }
-
-  private formatSampleRow(sampleRow: any): string {
-    if (!sampleRow) return 'No sample data available';
-
-    return Object.entries(sampleRow)
-      .map(([key, value]) => `${key}: ${String(value).substring(0, 50)}`)
-      .join(', ');
-  }
-
-  private interpolateTemplate(template: string, variables: Record<string, string>): string {
-    let result = template;
-    for (const [key, value] of Object.entries(variables)) {
-      result = result.replace(new RegExp(`{{${key}}}`, 'g'), value);
-    }
-    return result;
-  }
-
+  /**
+   * Build Markdown content for table documentation
+   */
   private buildMarkdownContent(
     tableDescription: string,
     columnDescriptions: Record<string, string>,
+    tableMetadata: any,
     sampleData: any[]
   ): string {
+    const schema = this.tableSpec.schema_name;
+    const table = this.tableSpec.table_name;
     const lines: string[] = [];
 
-    lines.push(`# ${this.tableMetadata.name}`);
+    lines.push(`# ${table}`);
     lines.push('');
-    lines.push(`**Database:** ${this.tableMetadata.database}`);
-    lines.push(`**Schema:** ${this.tableMetadata.schema}`);
+    lines.push(`**Database:** ${this.workUnit.database}`);
+    lines.push(`**Schema:** ${schema}`);
     lines.push(`**Description:** ${tableDescription}`);
     lines.push('');
 
-    if (this.tableMetadata.row_count) {
-      lines.push(`**Row Count:** ${this.tableMetadata.row_count.toLocaleString()}`);
+    if (this.tableSpec.row_count_approx) {
+      lines.push(`**Row Count:** ${this.tableSpec.row_count_approx.toLocaleString()}`);
       lines.push('');
     }
 
@@ -247,26 +552,37 @@ export class TableDocumenter {
     lines.push('| Column | Type | Nullable | Description |');
     lines.push('|--------|------|----------|-------------|');
 
-    for (const column of this.tableMetadata.columns) {
-      const desc = columnDescriptions[column.name] || 'No description available';
-      lines.push(`| ${column.name} | ${column.data_type} | ${column.is_nullable} | ${desc} |`);
+    for (const column of tableMetadata.columns || []) {
+      const columnName = column.column_name || column.name;
+      const desc = columnDescriptions[columnName] || 'No description available';
+      lines.push(`| ${columnName} | ${column.data_type} | ${column.is_nullable} | ${desc} |`);
     }
 
     lines.push('');
 
     // Keys section
-    if (this.tableMetadata.primary_key && this.tableMetadata.primary_key.length > 0) {
+    if (tableMetadata.primary_key && tableMetadata.primary_key.length > 0) {
       lines.push('## Primary Key');
       lines.push('');
-      lines.push(`\`${this.tableMetadata.primary_key.join(', ')}\``);
+      lines.push(`\`${tableMetadata.primary_key.join(', ')}\``);
       lines.push('');
     }
 
-    if (this.tableMetadata.foreign_keys && this.tableMetadata.foreign_keys.length > 0) {
+    if (tableMetadata.foreign_keys && tableMetadata.foreign_keys.length > 0) {
       lines.push('## Foreign Keys');
       lines.push('');
-      for (const fk of this.tableMetadata.foreign_keys) {
+      for (const fk of tableMetadata.foreign_keys) {
         lines.push(`- \`${fk.column_name}\` → \`${fk.referenced_table}.${fk.referenced_column}\``);
+      }
+      lines.push('');
+    }
+
+    // Indexes section
+    if (tableMetadata.indexes && tableMetadata.indexes.length > 0) {
+      lines.push('## Indexes');
+      lines.push('');
+      for (const idx of tableMetadata.indexes) {
+        lines.push(`- \`${idx.index_name || idx.name}\`: ${idx.index_definition || ''}`);
       }
       lines.push('');
     }
@@ -278,7 +594,7 @@ export class TableDocumenter {
       lines.push('| ' + Object.keys(sampleData[0]).join(' | ') + ' |');
       lines.push('| ' + Object.keys(sampleData[0]).map(() => '---').join(' | ') + ' |');
 
-      for (const row of sampleData.slice(0, 3)) {
+      for (const row of sampleData.slice(0, 5)) {
         const values = Object.values(row).map(val =>
           String(val).length > 50 ? String(val).substring(0, 47) + '...' : String(val)
         );
@@ -292,23 +608,33 @@ export class TableDocumenter {
     return lines.join('\n');
   }
 
+  /**
+   * Get Markdown file path according to PRD specification
+   * Path: docs/{work_unit.output_directory}/tables/{schema}.{table}.md
+   */
   private getMarkdownFilePath(): string {
+    const sanitizedSchema = this.sanitizeFileName(this.tableSpec.schema_name);
+    const sanitizedTable = this.sanitizeFileName(this.tableSpec.table_name);
     return path.join(
       this.docsPath,
-      'databases',
-      this.tableMetadata.database,
+      this.workUnit.output_directory,
       'tables',
-      `${this.tableMetadata.name}.md`
+      `${sanitizedSchema}.${sanitizedTable}.md`
     );
   }
 
+  /**
+   * Get JSON file path according to PRD specification
+   * Path: docs/{work_unit.output_directory}/tables/{schema}.{table}.json
+   */
   private getJSONFilePath(): string {
+    const sanitizedSchema = this.sanitizeFileName(this.tableSpec.schema_name);
+    const sanitizedTable = this.sanitizeFileName(this.tableSpec.table_name);
     return path.join(
       this.docsPath,
-      'databases',
-      this.tableMetadata.database,
-      'schemas',
-      `${this.tableMetadata.name}.json`
+      this.workUnit.output_directory,
+      'tables',
+      `${sanitizedSchema}.${sanitizedTable}.json`
     );
   }
 }

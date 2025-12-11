@@ -7,6 +7,8 @@
 
 import OpenAI from 'openai';
 import { logger } from './logger.js';
+import type { AgentError } from '../agents/documenter/types.js';
+import { createAgentError, ErrorCodes } from '../agents/documenter/errors.js';
 
 // Initialize OpenRouter client (for LLM completions - Claude models)
 function getOpenRouterClient(): OpenAI {
@@ -53,13 +55,211 @@ function getOpenRouterModel(model: string): string {
 }
 
 /**
+ * Create an LLM-specific AgentError
+ * 
+ * @param code Error code (DOC_LLM_TIMEOUT, DOC_LLM_FAILED, DOC_LLM_PARSE_FAILED)
+ * @param message Human-readable error message
+ * @param recoverable Whether the operation can be retried
+ * @param context Additional context for debugging
+ * @returns AgentError object with severity 'warning'
+ */
+function createLLMError(
+  code: string,
+  message: string,
+  recoverable: boolean,
+  context?: Record<string, unknown>
+): AgentError {
+  return createAgentError(code, message, 'warning', recoverable, context);
+}
+
+/**
+ * Classify an LLM error to determine error type and retry behavior
+ * 
+ * @param error The error to classify
+ * @param model The model being used (for context)
+ * @param attempt The attempt number (for context)
+ * @returns AgentError with appropriate code and recoverable flag
+ */
+function classifyLLMError(
+  error: Error | unknown,
+  model: string,
+  attempt: number
+): AgentError {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const errorObj = error instanceof Error ? error : new Error(String(error));
+
+  // Check for OpenAI SDK error types
+  if (errorObj instanceof OpenAI.APIError) {
+    const status = errorObj.status;
+    const headers = errorObj.headers;
+    
+    // Timeout errors (408 Request Timeout, 504 Gateway Timeout)
+    if (status === 408 || status === 504) {
+      return createLLMError(
+        ErrorCodes.DOC_LLM_TIMEOUT,
+        `LLM API call timed out: ${errorMessage}`,
+        true,
+        { model, attempt, status, originalError: errorMessage }
+      );
+    }
+
+    // Rate limit errors (429 Too Many Requests)
+    if (status === 429) {
+      // Check for Retry-After header
+      const retryAfter = headers?.['retry-after'] || headers?.['Retry-After'];
+      const retryAfterSeconds = retryAfter ? parseInt(String(retryAfter), 10) : undefined;
+
+      return createLLMError(
+        ErrorCodes.DOC_LLM_FAILED,
+        `LLM API rate limit exceeded: ${errorMessage}`,
+        true,
+        {
+          model,
+          attempt,
+          status,
+          originalError: errorMessage,
+          retryAfter: retryAfterSeconds,
+          retryAfterHeader: retryAfter,
+        }
+      );
+    }
+
+    // Service unavailable (503 Service Unavailable) - recoverable
+    if (status === 503) {
+      return createLLMError(
+        ErrorCodes.DOC_LLM_FAILED,
+        `LLM API service unavailable: ${errorMessage}`,
+        true,
+        { model, attempt, status, originalError: errorMessage }
+      );
+    }
+
+    // Client errors (400 Bad Request, 401 Unauthorized, 403 Forbidden) - not recoverable
+    if (status === 400 || status === 401 || status === 403) {
+      return createLLMError(
+        ErrorCodes.DOC_LLM_FAILED,
+        `LLM API client error: ${errorMessage}`,
+        false,
+        { model, attempt, status, originalError: errorMessage }
+      );
+    }
+
+    // Other API errors - treat as recoverable by default
+    return createLLMError(
+      ErrorCodes.DOC_LLM_FAILED,
+      `LLM API error: ${errorMessage}`,
+      true,
+      { model, attempt, status, originalError: errorMessage }
+    );
+  }
+
+  // Check for timeout in error message
+  if (
+    errorMessage.includes('timeout') ||
+    errorMessage.includes('ETIMEDOUT') ||
+    errorMessage.includes('TIMEOUT')
+  ) {
+    return createLLMError(
+      ErrorCodes.DOC_LLM_TIMEOUT,
+      `LLM call timed out: ${errorMessage}`,
+      true,
+      { model, attempt, originalError: errorMessage }
+    );
+  }
+
+  // Check for rate limit in error message
+  if (
+    errorMessage.includes('rate') ||
+    errorMessage.includes('429') ||
+    errorMessage.includes('quota') ||
+    errorMessage.includes('limit')
+  ) {
+    return createLLMError(
+      ErrorCodes.DOC_LLM_FAILED,
+      `LLM rate limit error: ${errorMessage}`,
+      true,
+      { model, attempt, originalError: errorMessage }
+    );
+  }
+
+  // Default to generic LLM failure (recoverable)
+  return createLLMError(
+    ErrorCodes.DOC_LLM_FAILED,
+    `LLM call failed: ${errorMessage}`,
+    true,
+    { model, attempt, originalError: errorMessage }
+  );
+}
+
+/**
+ * Validate LLM response to detect parse failures
+ * 
+ * @param response The response string to validate
+ * @throws AgentError with DOC_LLM_PARSE_FAILED if response is invalid
+ */
+function validateLLMResponse(response: string | null | undefined): void {
+  // Check for null or undefined
+  if (response === null || response === undefined) {
+    throw createLLMError(
+      ErrorCodes.DOC_LLM_PARSE_FAILED,
+      'LLM returned null or undefined response',
+      false,
+      { responseType: typeof response }
+    );
+  }
+
+  // Check for empty string
+  if (typeof response !== 'string') {
+    throw createLLMError(
+      ErrorCodes.DOC_LLM_PARSE_FAILED,
+      `LLM returned non-string response: ${typeof response}`,
+      false,
+      { responseType: typeof response }
+    );
+  }
+
+  // Check for empty or whitespace-only response
+  if (response.trim().length === 0) {
+    throw createLLMError(
+      ErrorCodes.DOC_LLM_PARSE_FAILED,
+      'LLM returned empty or whitespace-only response',
+      false,
+      { responseLength: response.length }
+    );
+  }
+
+  // Check for suspiciously short responses (may indicate truncation)
+  // Minimum reasonable response is 10 characters
+  if (response.trim().length < 10) {
+    logger.warn(`LLM response is very short (${response.length} chars), may be truncated`);
+  }
+}
+
+/**
+ * Token usage information from LLM response
+ */
+export interface TokenUsage {
+  prompt: number;
+  completion: number;
+  total: number;
+}
+
+/**
+ * LLM response with content and token usage
+ */
+export interface LLMResponse {
+  content: string;
+  tokens: TokenUsage;
+}
+
+/**
  * Call Claude via OpenRouter
  */
 async function callClaude(
   prompt: string,
   model: string = 'claude-sonnet-4',
   maxTokens: number = 4096
-): Promise<string> {
+): Promise<LLMResponse> {
   const client = getOpenRouterClient();
   const openRouterModel = getOpenRouterModel(model);
 
@@ -78,11 +278,33 @@ async function callClaude(
 
   const content = response.choices[0]?.message?.content;
 
-  if (!content) {
-    throw new Error('Empty response from OpenRouter');
+  // Validate response before returning
+  validateLLMResponse(content);
+
+  // Extract token usage
+  const usage = response.usage;
+  const tokens: TokenUsage = {
+    prompt: usage?.prompt_tokens ?? 0,
+    completion: usage?.completion_tokens ?? 0,
+    total: usage?.total_tokens ?? 0,
+  };
+
+  // Log token usage at debug level
+  logger.debug(
+    `LLM call used ${tokens.total} tokens (prompt: ${tokens.prompt}, completion: ${tokens.completion})`
+  );
+
+  // Warn if token usage is very high (threshold: 100k tokens)
+  if (tokens.total > 100000) {
+    logger.warn(
+      `High token usage detected: ${tokens.total} tokens (prompt: ${tokens.prompt}, completion: ${tokens.completion})`
+    );
   }
 
-  return content;
+  return {
+    content: content!,
+    tokens,
+  };
 }
 
 /**
@@ -92,7 +314,7 @@ async function callOpenAI(
   prompt: string,
   model: string = 'gpt-4',
   maxTokens: number = 4096
-): Promise<string> {
+): Promise<LLMResponse> {
   const client = getOpenAIClient();
 
   logger.debug(`Calling OpenAI with model: ${model}`);
@@ -110,11 +332,33 @@ async function callOpenAI(
 
   const content = response.choices[0]?.message?.content;
 
-  if (!content) {
-    throw new Error('Empty response from OpenAI');
+  // Validate response before returning
+  validateLLMResponse(content);
+
+  // Extract token usage
+  const usage = response.usage;
+  const tokens: TokenUsage = {
+    prompt: usage?.prompt_tokens ?? 0,
+    completion: usage?.completion_tokens ?? 0,
+    total: usage?.total_tokens ?? 0,
+  };
+
+  // Log token usage at debug level
+  logger.debug(
+    `LLM call used ${tokens.total} tokens (prompt: ${tokens.prompt}, completion: ${tokens.completion})`
+  );
+
+  // Warn if token usage is very high (threshold: 100k tokens)
+  if (tokens.total > 100000) {
+    logger.warn(
+      `High token usage detected: ${tokens.total} tokens (prompt: ${tokens.prompt}, completion: ${tokens.completion})`
+    );
   }
 
-  return content;
+  return {
+    content: content!,
+    tokens,
+  };
 }
 
 /**
@@ -165,7 +409,7 @@ export async function callLLM(
     timeout?: number;
     maxTokens?: number;
   } = {}
-): Promise<string> {
+): Promise<LLMResponse> {
   const {
     maxRetries = 3,
     retryDelay = 1000,
@@ -173,13 +417,14 @@ export async function callLLM(
     maxTokens = 4096,
   } = options;
 
-  let lastError: Error | null = null;
+  let lastError: AgentError | null = null;
+  const retryHistory: Array<{ attempt: number; error: AgentError; delay?: number }> = [];
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       logger.debug(`LLM call attempt ${attempt}/${maxRetries} for model ${model}`);
 
-      let response: string;
+      let response: LLMResponse;
 
       if (model.startsWith('claude-') || model.startsWith('anthropic/')) {
         // Use OpenRouter for Claude models
@@ -191,34 +436,85 @@ export async function callLLM(
         throw new Error(`Unsupported model: ${model}`);
       }
 
-      logger.debug(`LLM call successful, response length: ${response.length}`);
+      logger.debug(`LLM call successful, response length: ${response.content.length}`);
       return response;
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
+      // Classify the error
+      const classifiedError = classifyLLMError(error, model, attempt);
+      lastError = classifiedError;
 
-      logger.warn(`LLM call attempt ${attempt} failed: ${lastError.message}`);
+      logger.warn(`LLM call attempt ${attempt} failed: ${classifiedError.message}`, {
+        code: classifiedError.code,
+        recoverable: classifiedError.recoverable,
+        context: classifiedError.context,
+      });
 
-      // Check if it's a rate limit error
-      const isRateLimit =
-        lastError.message.includes('rate') ||
-        lastError.message.includes('429') ||
-        lastError.message.includes('quota');
+      // Check if we should retry
+      const shouldRetry =
+        attempt < maxRetries &&
+        classifiedError.recoverable &&
+        classifiedError.code !== ErrorCodes.DOC_LLM_PARSE_FAILED;
 
-      if (attempt < maxRetries) {
-        // Exponential backoff (longer for rate limits)
-        const delay = isRateLimit
-          ? retryDelay * Math.pow(2, attempt)
-          : retryDelay * Math.pow(2, attempt - 1);
+      if (shouldRetry) {
+        // Calculate delay - use Retry-After header if available for rate limits
+        let delay: number;
+        if (
+          classifiedError.code === ErrorCodes.DOC_LLM_FAILED &&
+          classifiedError.context?.retryAfter
+        ) {
+          // Use Retry-After header value (convert seconds to milliseconds)
+          delay = (classifiedError.context.retryAfter as number) * 1000;
+          // Cap at 30 seconds
+          delay = Math.min(delay, 30000);
+          logger.debug(`Using Retry-After header: ${delay}ms`);
+        } else {
+          // Exponential backoff: delay = min(1000 * 2^(attempt-1), 30000)
+          delay = Math.min(retryDelay * Math.pow(2, attempt - 1), 30000);
+        }
+
+        retryHistory.push({
+          attempt,
+          error: classifiedError,
+          delay,
+        });
 
         logger.debug(`Retrying in ${delay}ms...`);
         await new Promise((resolve) => setTimeout(resolve, delay));
+      } else {
+        // Don't retry - either max attempts reached, not recoverable, or parse failure
+        retryHistory.push({
+          attempt,
+          error: classifiedError,
+        });
+
+        // For parse failures, throw immediately (no retry)
+        if (classifiedError.code === ErrorCodes.DOC_LLM_PARSE_FAILED) {
+          throw classifiedError;
+        }
+
+        // For other non-recoverable errors, throw immediately
+        if (!classifiedError.recoverable) {
+          throw classifiedError;
+        }
       }
     }
   }
 
-  // All retries failed
-  logger.error('All LLM call attempts failed', lastError);
-  throw new Error(`LLM call failed after ${maxRetries} attempts: ${lastError?.message}`);
+  // All retries failed - create final error with retry history
+  const finalError = createLLMError(
+    lastError?.code ?? ErrorCodes.DOC_LLM_FAILED,
+    `LLM call failed after ${maxRetries} attempts: ${lastError?.message ?? 'Unknown error'}`,
+    false,
+    {
+      model,
+      attempts: maxRetries,
+      retryHistory,
+      finalError: lastError?.context,
+    }
+  );
+
+  logger.error('All LLM call attempts failed', finalError);
+  throw finalError;
 }
 
 /**
@@ -256,3 +552,4 @@ export async function validateLLMKeys(): Promise<void> {
     );
   }
 }
+

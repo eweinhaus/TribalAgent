@@ -110,7 +110,7 @@ async function inferDomainsWithLLM(
     });
 
     // Parse JSON response
-    const domains = parseDomainsResponse(response, tables);
+    const domains = parseDomainsResponse(response.content, tables);
 
     // Validate coverage
     const allTableNames = tables.map((t) => t.name || `${t.table_schema}.${t.table_name}`);

@@ -19,10 +19,10 @@ Build a deep agent system that automatically documents database schemas, indexes
 ### High-Level System Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         TRIBAL KNOWLEDGE DEEP AGENT                         │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
+┌────────────────────────────────────────────────────────────────────────────┐
+│                         TRIBAL KNOWLEDGE DEEP AGENT                        │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                            │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                  │
 │  │   PLANNER    │    │   AGENT 1    │    │   AGENT 2    │                  │
 │  │   Schema     │───▶│  Database    │───▶│  Document    │                  │
@@ -46,7 +46,7 @@ Build a deep agent system that automatically documents database schemas, indexes
 │  │  (JSON)      │    │  (MD/JSON/   │    │  + Vectors   │                  │
 │  │              │    │   YAML)      │    │  (FTS5+Vec)  │                  │
 │  └──────────────┘    └──────────────┘    └──────────────┘                  │
-│                                                                             │
+│                                                                            │
 │                             ┌──────────────┐                               │
 │                             │   AGENT 3    │                               │
 │                             │   Index      │                               │
@@ -59,7 +59,7 @@ Build a deep agent system that automatically documents database schemas, indexes
 │                             │  (Tools for  │                               │
 │                             │   Noah's MCP)│                               │
 │                             └──────────────┘                               │
-│                                                                             │
+│                                                                            │
 │  ┌──────────────────────────────────────────────────────────────────────┐  │
 │  │                        PROMPT TEMPLATES                              │  │
 │  │   /prompts/column-description.md   - Column semantic inference       │  │
@@ -67,7 +67,7 @@ Build a deep agent system that automatically documents database schemas, indexes
 │  │   /prompts/domain-inference.md     - Domain grouping logic           │  │
 │  │   /prompts/query-understanding.md  - Search query interpretation     │  │
 │  └──────────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
                     ┌───────────────────────────────┐
