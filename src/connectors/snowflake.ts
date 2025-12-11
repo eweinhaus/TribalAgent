@@ -246,14 +246,27 @@ export class SnowflakeConnector implements DatabaseConnector {
       ORDER BY ORDINAL_POSITION
     `;
 
-    const columns = await this.executeQuery(columnsQuery);
+    const rawColumns = await this.executeQuery(columnsQuery);
+    
+    // Normalize Snowflake's UPPERCASE column names to lowercase for consistency with PostgreSQL
+    const columns = rawColumns.map(col => ({
+      column_name: col.COLUMN_NAME,
+      ordinal_position: col.ORDINAL_POSITION,
+      data_type: col.DATA_TYPE,
+      is_nullable: col.IS_NULLABLE,
+      column_default: col.COLUMN_DEFAULT,
+      character_maximum_length: col.CHARACTER_MAXIMUM_LENGTH,
+      numeric_precision: col.NUMERIC_PRECISION,
+      numeric_scale: col.NUMERIC_SCALE,
+      comment: col.COMMENT,
+    }));
 
     // Get primary keys using SHOW PRIMARY KEYS
     let primaryKey: string[] = [];
     try {
       const pkCommand = `SHOW PRIMARY KEYS IN TABLE ${schema}.${table}`;
       const pkResult = await this.executeQuery(pkCommand);
-      primaryKey = pkResult.map(row => row.column_name);
+      primaryKey = pkResult.map(row => row.column_name || row.COLUMN_NAME);
     } catch (error) {
       logger.warn(`Failed to get primary key for ${schema}.${table}`, error);
     }
