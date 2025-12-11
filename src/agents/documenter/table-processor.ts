@@ -119,7 +119,7 @@ function sanitizeFileName(name: string): string {
 }
 
 /**
- * Process all tables in a work unit
+ * Process all tables in a work unit with parallel batching
  * 
  * @param workUnit Work unit to process
  * @param connector Database connector
@@ -135,35 +135,48 @@ export async function processTablesInWorkUnit(
   );
 
   const results: TableResult[] = [];
+  
+  // Batch size for parallel processing
+  // Balance between speed and database/LLM load
+  const BATCH_SIZE = 3;
 
-  for (const tableSpec of sortedTables) {
-    // Check if table should be skipped (files already exist)
-    const skip = await shouldSkipTable(workUnit, tableSpec);
+  // Process tables in parallel batches
+  for (let i = 0; i < sortedTables.length; i += BATCH_SIZE) {
+    const batch = sortedTables.slice(i, i + BATCH_SIZE);
     
-    if (skip) {
-      logger.debug(`Skipping table ${tableSpec.fully_qualified_name} (files already exist)`);
-      // Mark as succeeded (skipped tables are considered completed)
-      results.push(computeTableStatus(tableSpec.fully_qualified_name, true));
-      continue;
-    }
+    const batchPromises = batch.map(async (tableSpec) => {
+      // Check if table should be skipped (files already exist)
+      const skip = await shouldSkipTable(workUnit, tableSpec);
+      
+      if (skip) {
+        logger.debug(`Skipping table ${tableSpec.fully_qualified_name} (files already exist)`);
+        // Mark as succeeded (skipped tables are considered completed)
+        return computeTableStatus(tableSpec.fully_qualified_name, true);
+      }
 
-    try {
-      const result = await processTable(workUnit, tableSpec, connector);
-      results.push(result);
-    } catch (error) {
-      // Table processing failed
-      results.push({
-        table: tableSpec.fully_qualified_name,
-        succeeded: false,
-        error: {
-          code: 'DOC_TABLE_PROCESSING_FAILED',
-          message: error instanceof Error ? error.message : String(error),
-          severity: 'error',
-          timestamp: new Date().toISOString(),
-          recoverable: true,
-        },
-      });
-    }
+      try {
+        return await processTable(workUnit, tableSpec, connector);
+      } catch (error) {
+        // Table processing failed
+        return {
+          table: tableSpec.fully_qualified_name,
+          succeeded: false,
+          error: {
+            code: 'DOC_TABLE_PROCESSING_FAILED',
+            message: error instanceof Error ? error.message : String(error),
+            severity: 'error' as const,
+            timestamp: new Date().toISOString(),
+            recoverable: true,
+          },
+        };
+      }
+    });
+
+    // Wait for batch to complete
+    const batchResults = await Promise.all(batchPromises);
+    results.push(...batchResults);
+    
+    logger.debug(`Processed batch ${Math.floor(i / BATCH_SIZE) + 1}: ${batchResults.length} tables`);
   }
 
   return results;

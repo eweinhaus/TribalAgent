@@ -4,6 +4,11 @@
  * Executes documentation plan using work unit-based processing.
  * Processes work units sequentially by priority, tracks progress,
  * and supports checkpoint recovery.
+ * 
+ * Usage:
+ *   npm run document          - Run with cache (skip existing docs)
+ *   npm run document:fresh    - Clear cache and rebuild from scratch
+ *   npm run document:clean    - Just clear the cache (no rebuild)
  */
 
 import { logger } from '../../utils/logger.js';
@@ -46,6 +51,8 @@ let currentProgress: DocumenterProgress | null = null;
  * 3. Process work units sequentially
  * 4. Update progress and status
  * 5. Generate manifest
+ * 
+ * To clear cache and rebuild, use: npm run document:fresh
  */
 export async function runDocumenter(): Promise<void> {
   try {
@@ -257,11 +264,11 @@ function initializeProgress(plan: DocumentationPlan): DocumenterProgress {
   };
 }
 
-// Run if executed directly (check if this file is being run as main module)
-// For tsx/ts-node, we check if import.meta.url ends with the script path
+// Run if executed directly
 const isMainModule = import.meta.url.endsWith('documenter/index.ts') || 
                      import.meta.url.includes('documenter/index.ts') ||
                      process.argv[1]?.includes('documenter/index');
+
 if (isMainModule || import.meta.url === `file://${process.argv[1]}`) {
   runDocumenter().catch((error) => {
     logger.error('Documenter failed', error);

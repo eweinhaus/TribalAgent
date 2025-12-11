@@ -362,6 +362,49 @@ async function callOpenAI(
 }
 
 /**
+ * Split text into chunks that fit within the token limit
+ * Tries to split at sentence boundaries for better semantic coherence
+ */
+function splitTextIntoChunks(text: string, maxChars: number): string[] {
+  if (text.length <= maxChars) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= maxChars) {
+      chunks.push(remaining);
+      break;
+    }
+
+    // Try to find a good split point (sentence boundary) near the limit
+    let splitPoint = maxChars;
+    
+    // Look for sentence endings (.!?) within the last 20% of the chunk
+    const searchStart = Math.floor(maxChars * 0.8);
+    const searchRegion = remaining.substring(searchStart, maxChars);
+    const sentenceEnd = searchRegion.search(/[.!?]\s/);
+    
+    if (sentenceEnd !== -1) {
+      splitPoint = searchStart + sentenceEnd + 2; // Include the punctuation and space
+    } else {
+      // Fall back to splitting at a space
+      const lastSpace = remaining.lastIndexOf(' ', maxChars);
+      if (lastSpace > maxChars * 0.5) {
+        splitPoint = lastSpace + 1;
+      }
+    }
+
+    chunks.push(remaining.substring(0, splitPoint).trim());
+    remaining = remaining.substring(splitPoint).trim();
+  }
+
+  return chunks;
+}
+
+/**
  * Generate embeddings using OpenAI
  */
 export async function generateEmbeddings(
@@ -373,28 +416,97 @@ export async function generateEmbeddings(
   logger.debug(`Generating embeddings for ${texts.length} texts using ${model}`);
 
   // Process in batches to avoid API limits
-  const batchSize = 50;
+  // OpenAI embedding model has 8192 token limit per batch
+  // Use conservative estimate: ~3 chars per token (actual observed: 3.14)
+  const MAX_TOKENS_PER_BATCH = 7000; // Leave good margin from 8192 limit
+  const CHARS_PER_TOKEN = 3;
+  const MAX_CHARS_PER_BATCH = Math.floor(MAX_TOKENS_PER_BATCH * CHARS_PER_TOKEN); // 21000 chars
+  const MAX_CHARS_PER_DOC = Math.floor(7000 * CHARS_PER_TOKEN); // 21000 chars max for single doc
+
+  // Split oversized texts into multiple chunks, track original indices
+  const processedTexts: string[] = [];
+  const originalIndices: number[] = []; // Maps processed index -> original index
+
+  for (let i = 0; i < texts.length; i++) {
+    const text = texts[i];
+    if (text.length > MAX_CHARS_PER_DOC) {
+      const chunks = splitTextIntoChunks(text, MAX_CHARS_PER_DOC);
+      logger.info(`Split oversized embedding text: ${text.length} chars -> ${chunks.length} chunks`);
+      for (const chunk of chunks) {
+        processedTexts.push(chunk);
+        originalIndices.push(i);
+      }
+    } else {
+      processedTexts.push(text);
+      originalIndices.push(i);
+    }
+  }
+  
   const allEmbeddings: number[][] = [];
+  let currentBatch: string[] = [];
+  let currentBatchChars = 0;
 
-  for (let i = 0; i < texts.length; i += batchSize) {
-    const batch = texts.slice(i, i + batchSize);
+  for (let i = 0; i < processedTexts.length; i++) {
+    const text = processedTexts[i];
+    const textChars = text.length;
 
+    // If adding this text would exceed the limit, process current batch first
+    if (currentBatchChars + textChars > MAX_CHARS_PER_BATCH && currentBatch.length > 0) {
+      const response = await client.embeddings.create({
+        model,
+        input: currentBatch,
+      });
+
+      const batchEmbeddings = response.data.map((item) => item.embedding);
+      allEmbeddings.push(...batchEmbeddings);
+      
+      // Reset batch
+      currentBatch = [];
+      currentBatchChars = 0;
+      
+      // Small delay between batches to avoid rate limits
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    currentBatch.push(text);
+    currentBatchChars += textChars;
+  }
+
+  // Process remaining batch
+  if (currentBatch.length > 0) {
     const response = await client.embeddings.create({
       model,
-      input: batch,
+      input: currentBatch,
     });
 
     const batchEmbeddings = response.data.map((item) => item.embedding);
     allEmbeddings.push(...batchEmbeddings);
+  }
 
-    // Small delay between batches to avoid rate limits
-    if (i + batchSize < texts.length) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+  // For documents that were split, average their chunk embeddings
+  const finalEmbeddings: number[][] = [];
+  let i = 0;
+  for (let origIdx = 0; origIdx < texts.length; origIdx++) {
+    const chunkEmbeddings: number[][] = [];
+    while (i < originalIndices.length && originalIndices[i] === origIdx) {
+      chunkEmbeddings.push(allEmbeddings[i]);
+      i++;
+    }
+    
+    if (chunkEmbeddings.length === 1) {
+      finalEmbeddings.push(chunkEmbeddings[0]);
+    } else if (chunkEmbeddings.length > 1) {
+      // Average the embeddings for split documents
+      const avgEmbedding = chunkEmbeddings[0].map((_, dim) => {
+        const sum = chunkEmbeddings.reduce((acc, emb) => acc + emb[dim], 0);
+        return sum / chunkEmbeddings.length;
+      });
+      finalEmbeddings.push(avgEmbedding);
     }
   }
 
-  logger.debug(`Generated ${allEmbeddings.length} embeddings`);
-  return allEmbeddings;
+  logger.debug(`Generated ${finalEmbeddings.length} embeddings (from ${allEmbeddings.length} chunks)`);
+  return finalEmbeddings;
 }
 
 /**

@@ -254,8 +254,8 @@ export class TableDocumenter {
   }
 
   /**
-   * Spawn ColumnInferencer sub-agents for each column sequentially
-   * Processes columns one at a time to avoid token budget complexity
+   * Spawn ColumnInferencer sub-agents for each column in parallel
+   * Uses batched parallelism to avoid overwhelming the LLM API
    */
   private async documentColumns(
     columns: any[],
@@ -266,38 +266,56 @@ export class TableDocumenter {
     const table = this.tableSpec.table_name;
     const database = this.workUnit.database;
 
-    // Process columns sequentially (one at a time)
-    for (const column of columns) {
-      try {
-        // Extract sample values for this column from sampled data
-        const sampleValues = sampleData
-          .map(row => row[column.column_name || column.name])
-          .filter(val => val !== null && val !== undefined);
+    // Batch size for parallel processing (avoid overwhelming LLM API)
+    const BATCH_SIZE = 5;
 
-        const { ColumnInferencer } = await import('./ColumnInferencer.js');
-        const inferencer = new ColumnInferencer(
-          {
-            name: column.column_name || column.name,
-            data_type: column.data_type,
-            is_nullable: column.is_nullable,
-            column_default: column.column_default,
-            comment: column.comment,
-          },
-          {
-            database_name: database,
-            schema_name: schema,
-            table_name: table,
-          },
-          sampleValues
-        );
+    // Import ColumnInferencer once
+    const { ColumnInferencer } = await import('./ColumnInferencer.js');
 
-        const description = await inferencer.infer();
-        columnDescriptions[column.column_name || column.name] = description;
-      } catch (error) {
+    // Process columns in parallel batches
+    for (let i = 0; i < columns.length; i += BATCH_SIZE) {
+      const batch = columns.slice(i, i + BATCH_SIZE);
+      
+      const batchPromises = batch.map(async (column) => {
         const columnName = column.column_name || column.name;
-        logger.warn(`Failed to document column ${columnName}`, error);
-        // Use fallback description
-        columnDescriptions[columnName] = `Column ${columnName} of type ${column.data_type}.`;
+        
+        try {
+          // Extract sample values for this column from sampled data
+          const sampleValues = sampleData
+            .map(row => row[columnName])
+            .filter(val => val !== null && val !== undefined);
+
+          const inferencer = new ColumnInferencer(
+            {
+              name: columnName,
+              data_type: column.data_type,
+              is_nullable: column.is_nullable,
+              column_default: column.column_default,
+              comment: column.comment,
+            },
+            {
+              database_name: database,
+              schema_name: schema,
+              table_name: table,
+            },
+            sampleValues
+          );
+
+          const description = await inferencer.infer();
+          return { columnName, description };
+        } catch (error) {
+          logger.warn(`Failed to document column ${columnName}`, error);
+          // Use fallback description
+          return { columnName, description: `Column ${columnName} of type ${column.data_type}.` };
+        }
+      });
+
+      // Wait for batch to complete
+      const results = await Promise.all(batchPromises);
+      
+      // Collect results
+      for (const { columnName, description } of results) {
+        columnDescriptions[columnName] = description;
       }
     }
 
