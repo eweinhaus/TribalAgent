@@ -6,7 +6,7 @@
  */
 
 import { Database as DatabaseType } from 'better-sqlite3';
-import {
+import type {
   ParsedDocument,
   ParsedTableDoc,
   ParsedColumnDoc,
@@ -17,7 +17,7 @@ import {
   IndexableFile,
   IndexStats,
 } from './types.js';
-import { float32ArrayToBlob } from './database/init.js';
+import { float32ArrayToBlob, isSqliteVecAvailable } from './database/init.js';
 import { computeSHA256 } from './manifest.js';
 import { generateSummary } from './embeddings.js';
 import { logger } from '../../utils/logger.js';
@@ -152,6 +152,29 @@ export function getDocumentIdentity(doc: ParsedDocument): string {
 }
 
 /**
+ * Build document identity from ProcessedDocument
+ * Must match the format used in embeddings.ts getDocumentId()
+ */
+function buildDocumentIdentity(doc: ProcessedDocument): string {
+  switch (doc.docType) {
+    case 'table':
+      return `${doc.database}.${doc.schema}.${doc.table}`;
+    case 'column':
+      return `${doc.database}.${doc.schema}.${doc.table}.${doc.column}`;
+    case 'domain':
+      return `${doc.database}.${doc.domain}`;
+    case 'relationship':
+      // For relationships, we need source_to_target format
+      // But ProcessedDocument only has table (source), we'll try a pattern match
+      return `${doc.database}.${doc.table}_to_`;  // Partial match
+    case 'overview':
+      return `${doc.database}.overview`;
+    default:
+      return 'unknown';
+  }
+}
+
+/**
  * Find modified_at for a document with exact matching
  */
 export function findModifiedAt(doc: ParsedDocument, files: IndexableFile[]): string {
@@ -260,12 +283,17 @@ export function populateIndex(
     RETURNING id, (changes() = 0) as was_update
   `);
 
-  const insertVec = db.prepare(`
-    INSERT OR REPLACE INTO documents_vec (id, embedding) VALUES (?, ?)
+  // Note: documents_vec uses document_id column (not id) to match expected schema
+  // vec0 doesn't support parameterized queries for vec_f32() - must use direct SQL
+  const deleteVecById = db.prepare(`DELETE FROM documents_vec WHERE document_id = ?`);
+  
+  // Prepared statement for blob fallback (when vec0 unavailable)
+  const insertVecBlob = db.prepare(`
+    INSERT OR REPLACE INTO documents_vec (document_id, embedding) VALUES (?, ?)
   `);
 
   const deleteVec = db.prepare(`
-    DELETE FROM documents_vec WHERE id = ?
+    DELETE FROM documents_vec WHERE document_id = ?
   `);
 
   // Use transaction for atomicity
@@ -312,11 +340,47 @@ export function populateIndex(
           parentDocIds.set(doc.filePath, docId);
         }
 
-        // Handle embedding
-        const embedding = embeddings.get(doc.filePath);
+        // Handle embedding - try both filePath and document identity as keys
+        // The identity key format matches what embeddings.ts uses
+        const docIdentity = buildDocumentIdentity(doc);
+        
+        let embedding = embeddings.get(doc.filePath);
+        if (!embedding) {
+          // Fallback: try document identity key (used by embeddings.ts)
+          embedding = embeddings.get(docIdentity);
+        }
+        
+        // For relationships, try partial match on keys (since we may not have full info)
+        if (!embedding && doc.docType === 'relationship') {
+          const prefix = `${doc.database}.${doc.table}_to_`;
+          for (const [key, emb] of embeddings) {
+            if (key.startsWith(prefix)) {
+              embedding = emb;
+              break;
+            }
+          }
+        }
+        
         if (embedding) {
-          const embeddingBlob = float32ArrayToBlob(embedding);
-          insertVec.run(docId, embeddingBlob);
+          // vec0 virtual table with float[1536] expects JSON array string, blob fallback expects BLOB
+          if (isSqliteVecAvailable()) {
+            // vec0's float[1536] column type expects JSON array string
+            const embeddingJson = JSON.stringify(embedding);
+            
+            // Delete existing row first (vec0 doesn't support INSERT OR REPLACE)
+            deleteVecById.run(docId);
+            
+            // vec0 requires direct SQL construction with vec_f32() - parameterized queries don't work
+            // Escape single quotes in JSON to prevent SQL injection (JSON strings shouldn't contain unescaped quotes anyway)
+            const escapedJson = embeddingJson.replace(/'/g, "''");
+            const insertSql = `INSERT INTO documents_vec (document_id, embedding) VALUES (${docId}, vec_f32('${escapedJson}'))`;
+            
+            db.exec(insertSql);
+          } else {
+            // Insert as BLOB for fallback storage
+            const embeddingBlob = float32ArrayToBlob(embedding);
+            insertVecBlob.run(docId, embeddingBlob);
+          }
         } else {
           // Remove any stale embedding
           deleteVec.run(docId);

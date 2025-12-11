@@ -327,24 +327,27 @@ export interface DocumentationManifest {
   indexable_files: IndexableFile[];
 }
 
+/**
+ * DatabaseManifest - matches Indexer's expected schema
+ * Required fields: name, connection_name, table_count, status
+ */
 export interface DatabaseManifest {
   name: string;
-  type: DatabaseType;
-  docs_directory: string;
-  tables_documented: number;
-  tables_failed: number;
-  domains: string[];
+  connection_name: string;
+  table_count: number;
+  status: 'complete' | 'partial' | 'failed';
 }
 
+/**
+ * WorkUnitManifest - matches Indexer's expected schema
+ * Required fields: id, database, table_count, status
+ * Note: status uses 'complete' not 'completed' to match indexer
+ */
 export interface WorkUnitManifest {
   id: string;
-  status: 'completed' | 'failed' | 'partial';
-  output_directory: string;
-  files_generated: number;
-  output_hash: ContentHash;
-  /** Can this work unit be re-processed independently? */
-  reprocessable: boolean;
-  errors?: AgentError[];
+  database: string;
+  table_count: number;
+  status: 'complete' | 'partial' | 'failed';
 }
 
 export interface IndexableFile {

@@ -119,11 +119,17 @@ function extractForeignKeysFromContent(content: string): Array<{
   }> = [];
 
   // Look for patterns like:
+  // - `customer_id` → `customers.id` (Markdown format from TableDocumenter)
   // - customer_id -> customers.id
   // - customer_id references customers(id)
   // - FK: customer_id -> schema.table.column
   // - **Foreign Key**: References table.column
   const patterns = [
+    // Markdown format: `col` → `table.col` or `col` → `schema.table.col` (Unicode arrow)
+    /`(\w+)`\s*→\s*`(?:(\w+)\.)?(\w+)\.(\w+)`/g,
+    // ASCII arrow variants
+    /`(\w+)`\s*->\s*`(?:(\w+)\.)?(\w+)\.(\w+)`/g,
+    /(\w+)\s*→\s*(?:(\w+)\.)?(\w+)\.(\w+)/g,  // col → [schema.]table.col
     /(\w+)\s*->\s*(?:(\w+)\.)?(\w+)\.(\w+)/g,  // col -> [schema.]table.col
     /(\w+)\s+references?\s+(?:(\w+)\.)?(\w+)\((\w+)\)/gi,  // col references [schema.]table(col)
     /FK:\s*(\w+)\s*->\s*(?:(\w+)\.)?(\w+)\.(\w+)/gi,  // FK: col -> [schema.]table.col

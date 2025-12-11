@@ -325,10 +325,14 @@ function parseFilePath(
 /**
  * Build complete manifest structure
  * 
+ * Produces manifest format that matches Indexer's expected schema:
+ * - DatabaseManifest: { name, connection_name, table_count, status }
+ * - WorkUnitManifest: { id, database, table_count, status }
+ * 
  * @param progress Documenter progress
  * @param plan Documentation plan
  * @param indexableFiles Scanned and processed files
- * @returns Complete manifest
+ * @returns Complete manifest matching Indexer's expected format
  */
 function buildManifestStructure(
   progress: DocumenterProgress,
@@ -343,13 +347,12 @@ function buildManifestStructure(
   const manifestStatus: 'complete' | 'partial' = 
     overallStatus === 'completed' ? 'complete' : 'partial';
 
-  // Build database manifests
+  // Build database manifests - matches Indexer's DatabaseManifest schema
   const databaseManifests: DatabaseManifest[] = plan.databases.map(db => {
     // Count tables documented/failed for this database
     const workUnitsForDb = plan.work_units.filter(wu => wu.database === db.name);
     let tablesDocumented = 0;
     let tablesFailed = 0;
-    const domains = new Set<string>();
 
     for (const wu of workUnitsForDb) {
       const wuProgress = progress.work_units[wu.id];
@@ -357,51 +360,50 @@ function buildManifestStructure(
         tablesDocumented += wuProgress.tables_completed;
         tablesFailed += wuProgress.tables_failed;
       }
-      domains.add(wu.domain);
+    }
+
+    // Determine database status based on table results
+    let dbStatus: 'complete' | 'partial' | 'failed';
+    if (tablesFailed > 0 && tablesDocumented === 0) {
+      dbStatus = 'failed';
+    } else if (tablesFailed > 0) {
+      dbStatus = 'partial';
+    } else {
+      dbStatus = 'complete';
     }
 
     return {
       name: db.name,
-      type: db.type,
-      docs_directory: `databases/${db.name}`,
-      tables_documented: tablesDocumented,
-      tables_failed: tablesFailed,
-      domains: Array.from(domains),
+      connection_name: db.name, // Use database name as connection_name
+      table_count: tablesDocumented,
+      status: dbStatus,
     };
   });
 
-  // Build work unit manifests
+  // Build work unit manifests - matches Indexer's WorkUnitManifest schema
   const workUnitManifests: WorkUnitManifest[] = plan.work_units.map(wu => {
     const wuProgress = progress.work_units[wu.id];
     
-    // Determine work unit status
-    let wuStatus: 'completed' | 'failed' | 'partial';
+    // Determine work unit status - use 'complete' not 'completed' to match indexer
+    let wuStatus: 'complete' | 'partial' | 'failed';
     if (!wuProgress) {
       wuStatus = 'failed';
     } else if (wuProgress.status === 'completed') {
-      wuStatus = 'completed';
+      wuStatus = 'complete'; // Convert 'completed' to 'complete' for indexer compatibility
     } else if (wuProgress.status === 'failed') {
       wuStatus = 'failed';
     } else {
       wuStatus = 'partial';
     }
 
-    // Count files for this work unit
-    const filesForWorkUnit = indexableFiles.filter(f =>
-      f.path.startsWith(wu.output_directory)
-    );
-
-    // Compute output hash (hash of all file hashes for this work unit)
-    const outputHash = computeWorkUnitOutputHash(filesForWorkUnit);
+    // Count tables for this work unit
+    const tableCount = wuProgress?.tables_completed || 0;
 
     return {
       id: wu.id,
+      database: wu.database,
+      table_count: tableCount,
       status: wuStatus,
-      output_directory: wu.output_directory,
-      files_generated: filesForWorkUnit.length,
-      output_hash: outputHash,
-      reprocessable: true, // Work units can be re-processed independently
-      errors: wuProgress?.errors || [],
     };
   });
 
@@ -417,26 +419,6 @@ function buildManifestStructure(
   };
 }
 
-/**
- * Compute hash of work unit output (hash of all file hashes)
- */
-function computeWorkUnitOutputHash(files: IndexableFile[]): ContentHash {
-  if (files.length === 0) {
-    // Return empty hash for empty work units
-    return '0'.repeat(64);
-  }
-
-  // Sort files by path for consistent hashing
-  const sortedFiles = [...files].sort((a, b) => a.path.localeCompare(b.path));
-  
-  // Create hash of all file hashes
-  const hash = crypto.createHash('sha256');
-  for (const file of sortedFiles) {
-    hash.update(file.content_hash);
-  }
-  
-  return hash.digest('hex');
-}
 
 /**
  * Validation result

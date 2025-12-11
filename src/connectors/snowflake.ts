@@ -8,6 +8,10 @@ import { logger } from '../utils/logger.js';
 import { DatabaseConnector } from './index.js';
 import snowflake from 'snowflake-sdk';
 
+// Configure Snowflake SDK to reduce verbosity (suppress INFO logs)
+// Valid levels: ERROR, WARN, INFO, DEBUG, TRACE
+snowflake.configure({ logLevel: 'WARN' });
+
 export class SnowflakeConnector implements DatabaseConnector {
   private connection: snowflake.Connection | null = null;
 

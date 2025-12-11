@@ -1,23 +1,34 @@
-# Database Catalog Configuration
-# Copy this file to databases.yaml and configure your databases
+# Database Configuration Example
+# Copy this to databases.yaml and configure your connections.
+# Credentials should be stored in .env and referenced using ${VAR_NAME} syntax.
 
 databases:
-  - name: production_postgres
-    type: postgres
-    connection_env: POSTGRES_PRODUCTION
-    schemas:
-      - public
-      - analytics
-    exclude_tables:
-      - "*.migrations"
-      - "*.audit_log"
-
-  - name: analytics_snowflake
+  - name: snowflake_production
     type: snowflake
-    connection_env: SNOWFLAKE_ANALYTICS
+    connection_config: '{"account":"${SNOWFLAKE_ACCOUNT}","username":"${SNOWFLAKE_USERNAME}","password":"${SNOWFLAKE_PASSWORD}","warehouse":"${SNOWFLAKE_WAREHOUSE}","database":"${SNOWFLAKE_DATABASE}","region":"${SNOWFLAKE_REGION}"}'
     schemas:
-      - ANALYTICS
-      - RAW
-    exclude_tables:
-      - "*.TEMP_*"
+      - PUBLIC
+    exclude_tables: []
 
+  - name: postgres_production
+    type: postgres
+    connection_string: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DATABASE}"
+    schemas: []
+    exclude_tables: []
+
+# Required environment variables (add to .env):
+# 
+# # Snowflake
+# SNOWFLAKE_ACCOUNT=your-account
+# SNOWFLAKE_USERNAME=your-username
+# SNOWFLAKE_PASSWORD=your-password
+# SNOWFLAKE_WAREHOUSE=COMPUTE_WH
+# SNOWFLAKE_DATABASE=YOUR_DB
+# SNOWFLAKE_REGION=us-west-2
+#
+# # PostgreSQL
+# POSTGRES_HOST=localhost
+# POSTGRES_PORT=5432
+# POSTGRES_USER=postgres
+# POSTGRES_PASSWORD=your-password
+# POSTGRES_DATABASE=your-database

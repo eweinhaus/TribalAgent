@@ -29,8 +29,13 @@ let sqliteVecAvailable = false;
 function tryLoadSqliteVec(db: DatabaseType): boolean {
   // Common paths where sqlite-vec might be installed
   const extensionPaths = [
-    // npm installed
+    // npm installed (platform-specific packages)
+    path.join(process.cwd(), 'node_modules', 'sqlite-vec-darwin-arm64', 'vec0'),
+    path.join(process.cwd(), 'node_modules', 'sqlite-vec-darwin-x64', 'vec0'),
+    path.join(process.cwd(), 'node_modules', 'sqlite-vec-linux-x64', 'vec0'),
     path.join(process.cwd(), 'node_modules', 'sqlite-vec', 'dist', 'vec0'),
+    // Local build
+    path.join(process.cwd(), 'sqlite-vec', 'dist', 'vec0'),
     // System paths
     '/usr/local/lib/sqlite-vec/vec0',
     '/usr/lib/sqlite-vec/vec0',
@@ -200,6 +205,7 @@ export async function initializeSchema(db: DatabaseType): Promise<void> {
 
   // Vector embeddings table
   // Uses vec0 virtual table if sqlite-vec is available, otherwise falls back to blob storage
+  // NOTE: Uses document_id (not id) to match expected schema for test_all_search.py
   if (sqliteVecAvailable) {
     // Check if vec0 table already exists (can't use IF NOT EXISTS with virtual tables)
     const vecTableExists = db.prepare(`
@@ -210,8 +216,8 @@ export async function initializeSchema(db: DatabaseType): Promise<void> {
       try {
         db.exec(`
           CREATE VIRTUAL TABLE documents_vec USING vec0(
-            id INTEGER PRIMARY KEY,
-            embedding FLOAT[1536]
+            document_id INTEGER PRIMARY KEY,
+            embedding float[1536]
           );
         `);
         logger.debug('Created documents_vec using vec0 virtual table');
@@ -221,9 +227,9 @@ export async function initializeSchema(db: DatabaseType): Promise<void> {
         sqliteVecAvailable = false;
         db.exec(`
           CREATE TABLE IF NOT EXISTS documents_vec (
-            id INTEGER PRIMARY KEY,
+            document_id INTEGER PRIMARY KEY,
             embedding BLOB NOT NULL,
-            FOREIGN KEY (id) REFERENCES documents(id) ON DELETE CASCADE
+            FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
           );
         `);
       }
@@ -232,9 +238,9 @@ export async function initializeSchema(db: DatabaseType): Promise<void> {
     // Fallback: blob storage for compatibility
     db.exec(`
       CREATE TABLE IF NOT EXISTS documents_vec (
-        id INTEGER PRIMARY KEY,
+        document_id INTEGER PRIMARY KEY,
         embedding BLOB NOT NULL,          -- 1536 * 4 bytes = 6144 bytes per embedding
-        FOREIGN KEY (id) REFERENCES documents(id) ON DELETE CASCADE
+        FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
       );
     `);
   }
@@ -382,6 +388,7 @@ export function clearAllData(db: DatabaseType): void {
   logger.warn('Clearing all indexed data...');
 
   db.transaction(() => {
+    // Note: documents_vec uses document_id column
     db.exec('DELETE FROM documents_vec');
     db.exec('DELETE FROM relationships');
     db.exec('DELETE FROM documents');
