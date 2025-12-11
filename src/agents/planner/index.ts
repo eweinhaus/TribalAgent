@@ -238,6 +238,21 @@ export async function runPlanner(options: PlannerOptions = {}): Promise<Document
 /**
  * Load database configuration from databases.yaml.
  */
+/**
+ * Substitute environment variables in a string.
+ * Supports ${VAR_NAME} syntax.
+ */
+function substituteEnvVars(content: string): string {
+  return content.replace(/\$\{([^}]+)\}/g, (match, varName) => {
+    const value = process.env[varName];
+    if (value === undefined) {
+      logger.warn(`Environment variable ${varName} is not set`);
+      return match; // Keep original if not set
+    }
+    return value;
+  });
+}
+
 async function loadDatabaseConfig(configPath: string): Promise<DatabaseCatalog> {
   try {
     await fs.access(configPath);
@@ -248,7 +263,9 @@ async function loadDatabaseConfig(configPath: string): Promise<DatabaseCatalog> 
   }
 
   try {
-    const content = await fs.readFile(configPath, 'utf-8');
+    let content = await fs.readFile(configPath, 'utf-8');
+    // Substitute environment variables (${VAR_NAME} syntax)
+    content = substituteEnvVars(content);
     const parsed = yaml.load(content) as DatabaseCatalog;
 
     // Handle legacy format where databases is an object instead of array

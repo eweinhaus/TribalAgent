@@ -43,10 +43,80 @@ Planner (Schema Analyzer) → Documenter → Indexer → Retrieval (via MCP)
 
 4. **Run the pipeline**:
    ```bash
-   npm run plan      # Analyze schemas, create plan
-   npm run document  # Generate documentation
-   npm run index     # Build search index
+   npx dotenv-cli npm run pipeline
    ```
+
+## NPM Commands
+
+### Pipeline Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run pipeline` | Run full pipeline: plan → document → index |
+| `npm run pipeline:fresh` | Clear all caches, then run full pipeline |
+
+### Planner Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run plan` | Analyze database schemas, create documentation plan |
+| `npm run plan:validate` | Validate an existing plan file |
+
+### Documenter Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run document` | Generate documentation (uses cache, skips existing) |
+| `npm run document:clean` | Clear `docs/` and progress (preserves plan) |
+| `npm run document:fresh` | Clear cache, then rebuild all documentation |
+
+### Indexer Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run index` | Build search index in SQLite |
+| `npm run index:clean` | Delete `knowledge.db` |
+| `npm run index:fresh` | Clear database, then rebuild index |
+
+### Utility Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run status` | Check pipeline status |
+| `npm run validate-prompts` | Validate prompt templates |
+| `npm run build` | Compile TypeScript to JavaScript |
+| `npm run dev` | Run in development mode with watch |
+
+### Testing Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run test` | Run all tests |
+| `npm run test:watch` | Run tests in watch mode |
+| `npm run test:unit` | Run unit tests only |
+| `npm run test:integration` | Run integration tests (requires Docker) |
+
+### Usage Examples
+
+```bash
+# First time setup - run full pipeline
+npx dotenv-cli npm run pipeline
+
+# Regenerate all documentation from scratch
+npx dotenv-cli npm run document:fresh
+
+# Rebuild search index only
+npx dotenv-cli npm run index:fresh
+
+# Clear everything and start over
+npx dotenv-cli npm run pipeline:fresh
+
+# Just clear caches (no rebuild)
+npm run document:clean
+npm run index:clean
+```
+
+> **Note**: Use `npx dotenv-cli` prefix to load environment variables from `.env` file.
 
 ## Project Structure
 

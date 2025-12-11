@@ -173,11 +173,28 @@ export async function loadDocumentationPlan(): Promise<DocumentationPlan> {
 }
 
 /**
- * Parse YAML content
+ * Substitute environment variables in a string.
+ * Supports ${VAR_NAME} syntax.
+ */
+function substituteEnvVars(content: string): string {
+  return content.replace(/\$\{([^}]+)\}/g, (match, varName) => {
+    const value = process.env[varName];
+    if (value === undefined) {
+      logger.warn(`Environment variable ${varName} is not set`);
+      return match; // Keep original if not set
+    }
+    return value;
+  });
+}
+
+/**
+ * Parse YAML content with environment variable substitution
  */
 async function parseYaml(content: string): Promise<any> {
   try {
-    return yaml.load(content);
+    // Substitute environment variables before parsing
+    const substituted = substituteEnvVars(content);
+    return yaml.load(substituted);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Failed to parse YAML: ${message}`);
