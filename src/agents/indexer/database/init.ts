@@ -29,8 +29,13 @@ let sqliteVecAvailable = false;
 function tryLoadSqliteVec(db: DatabaseType): boolean {
   // Common paths where sqlite-vec might be installed
   const extensionPaths = [
-    // npm installed
+    // npm installed (platform-specific packages)
+    path.join(process.cwd(), 'node_modules', 'sqlite-vec-darwin-arm64', 'vec0'),
+    path.join(process.cwd(), 'node_modules', 'sqlite-vec-darwin-x64', 'vec0'),
+    path.join(process.cwd(), 'node_modules', 'sqlite-vec-linux-x64', 'vec0'),
     path.join(process.cwd(), 'node_modules', 'sqlite-vec', 'dist', 'vec0'),
+    // Local build
+    path.join(process.cwd(), 'sqlite-vec', 'dist', 'vec0'),
     // System paths
     '/usr/local/lib/sqlite-vec/vec0',
     '/usr/lib/sqlite-vec/vec0',
