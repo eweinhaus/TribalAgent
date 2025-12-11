@@ -131,20 +131,50 @@ export class SnowflakeConnector implements DatabaseConnector {
 
     try {
       const relationships: any[] = [];
+      const seenConstraints = new Set<string>();
 
-      // Get foreign key relationships using SHOW IMPORTED KEYS
-      const showCommand = 'SHOW IMPORTED KEYS';
-      const fkResult = await this.executeQuery(showCommand);
+      // Get outgoing foreign key relationships using SHOW IMPORTED KEYS
+      // (tables that THIS database references)
+      try {
+        const importedKeysResult = await this.executeQuery('SHOW IMPORTED KEYS');
+        for (const fk of importedKeysResult) {
+          const constraintKey = `${fk.fk_name}:${fk.fk_table_name}:${fk.pk_table_name}`;
+          if (!seenConstraints.has(constraintKey)) {
+            seenConstraints.add(constraintKey);
+            relationships.push({
+              source_table: `${fk.fk_database_name}.${fk.fk_schema_name}.${fk.fk_table_name}`,
+              source_column: fk.fk_column_name,
+              target_table: `${fk.pk_database_name}.${fk.pk_schema_name}.${fk.pk_table_name}`,
+              target_column: fk.pk_column_name,
+              relationship_type: 'foreign_key',
+              constraint_name: fk.fk_name,
+            });
+          }
+        }
+      } catch (error) {
+        logger.warn('Failed to get imported keys (outgoing FKs)', error);
+      }
 
-      for (const fk of fkResult) {
-        relationships.push({
-          source_table: `${fk.fk_database_name}.${fk.fk_schema_name}.${fk.fk_table_name}`,
-          source_column: fk.fk_column_name,
-          target_table: `${fk.pk_database_name}.${fk.pk_schema_name}.${fk.pk_table_name}`,
-          target_column: fk.pk_column_name,
-          relationship_type: 'foreign_key',
-          constraint_name: fk.fk_name,
-        });
+      // Get incoming foreign key relationships using SHOW EXPORTED KEYS
+      // (tables that REFERENCE this database's tables)
+      try {
+        const exportedKeysResult = await this.executeQuery('SHOW EXPORTED KEYS');
+        for (const fk of exportedKeysResult) {
+          const constraintKey = `${fk.fk_name}:${fk.fk_table_name}:${fk.pk_table_name}`;
+          if (!seenConstraints.has(constraintKey)) {
+            seenConstraints.add(constraintKey);
+            relationships.push({
+              source_table: `${fk.fk_database_name}.${fk.fk_schema_name}.${fk.fk_table_name}`,
+              source_column: fk.fk_column_name,
+              target_table: `${fk.pk_database_name}.${fk.pk_schema_name}.${fk.pk_table_name}`,
+              target_column: fk.pk_column_name,
+              relationship_type: 'foreign_key',
+              constraint_name: fk.fk_name,
+            });
+          }
+        }
+      } catch (error) {
+        logger.warn('Failed to get exported keys (incoming FKs)', error);
       }
 
       return relationships;
