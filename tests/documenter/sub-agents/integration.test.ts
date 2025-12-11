@@ -8,10 +8,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import { TableDocumenter } from '../TableDocumenter.js';
-import { ColumnInferencer } from '../ColumnInferencer.js';
-import { getDatabaseConnector } from '../../../../connectors/index.js';
-import type { WorkUnit, TableSpec } from '../../types.js';
+import { TableDocumenter } from '../../src/agents/documenter/sub-agents/TableDocumenter.js';
+import { ColumnInferencer } from '../../src/agents/documenter/sub-agents/ColumnInferencer.js';
+import { getDatabaseConnector } from '../../src/connectors/index.js';
+import type { WorkUnit, TableSpec } from '../../src/agents/documenter/types.js';
 
 describe('Sub-Agent Integration Tests', () => {
   const testDbUrl = process.env.TEST_DATABASE_URL;

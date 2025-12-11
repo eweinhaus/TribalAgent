@@ -10,9 +10,9 @@
 
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import { getDatabaseConnector } from '../../../../connectors/index.js';
-import type { DatabaseConnector } from '../../../../connectors/index.js';
-import type { DocumentationPlan, WorkUnit, TableSpec } from '../../types.js';
+import { getDatabaseConnector } from '../../../src/connectors/index.js';
+import type { DatabaseConnector } from '../../../src/connectors/index.js';
+import type { DocumentationPlan, WorkUnit, TableSpec } from '../../../src/agents/documenter/types.js';
 import * as crypto from 'crypto';
 
 /**

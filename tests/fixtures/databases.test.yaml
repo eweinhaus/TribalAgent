@@ -1,0 +1,7 @@
+version: '1.0'
+databases:
+  - name: integration_test
+    type: postgres
+    connection_string_env: TEST_POSTGRES_URL
+    schemas_include:
+      - public

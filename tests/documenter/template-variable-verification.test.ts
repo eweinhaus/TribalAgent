@@ -10,7 +10,7 @@ import path from 'path';
 import {
   mapTableVariables,
   mapColumnVariables,
-} from '../../../utils/prompts.js';
+} from '../../src/utils/prompts.js';
 
 describe('Template Variable Completeness', () => {
   const TABLE_TEMPLATE_PATH = path.join(

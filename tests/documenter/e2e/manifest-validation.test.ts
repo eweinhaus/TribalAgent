@@ -23,8 +23,8 @@ import {
   countFiles,
 } from './helpers.js';
 import { teardownTestEnvironment, cleanupTestTables } from './teardown.js';
-import { runDocumenter } from '../../index.js';
-import { computeFileHash } from '../../manifest-generator.js';
+import { runDocumenter } from '../../src/agents/documenter/index.js';
+import { computeFileHash } from '../../src/agents/documenter/manifest-generator.js';
 
 describe('E2E: Manifest Validation Test', () => {
   let env: TestEnvironment | undefined;

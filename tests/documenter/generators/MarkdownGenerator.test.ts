@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { MarkdownGenerator } from '../MarkdownGenerator.js';
-import type { TableDocumentationData } from '../types.js';
+import { MarkdownGenerator } from '../../src/agents/documenter/generators/MarkdownGenerator.js';
+import type { TableDocumentationData } from '../../src/agents/documenter/generators/types.js';
 
 describe('MarkdownGenerator', () => {
   const createTestData = (overrides?: Partial<TableDocumentationData>): TableDocumentationData => ({

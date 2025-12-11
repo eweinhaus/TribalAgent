@@ -29,7 +29,7 @@ import {
   countFiles,
 } from './helpers.js';
 import { teardownTestEnvironment, cleanupTestTables } from './teardown.js';
-import { runDocumenter } from '../../index.js';
+import { runDocumenter } from '../../src/agents/documenter/index.js';
 
 describe('E2E: Complete Pipeline Test', () => {
   let env: TestEnvironment | undefined;

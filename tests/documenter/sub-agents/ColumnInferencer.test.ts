@@ -3,11 +3,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ColumnInferencer } from '../ColumnInferencer.js';
-import { ErrorCodes } from '../../errors.js';
+import { ColumnInferencer } from '../../src/agents/documenter/sub-agents/ColumnInferencer.js';
+import { ErrorCodes } from '../../src/agents/documenter/errors.js';
 
 // Mock dependencies
-vi.mock('../../../utils/logger.js', () => ({
+vi.mock('../../src/utils/logger.js', () => ({
   logger: {
     debug: vi.fn(),
     warn: vi.fn(),
@@ -26,18 +26,18 @@ const mockInterpolateTemplate = vi.fn((template: string, vars: Record<string, st
 const mockMapColumnVariables = vi.fn();
 const mockCallLLM = vi.fn();
 
-vi.mock('../../../utils/prompts.js', () => ({
+vi.mock('../../src/utils/prompts.js', () => ({
   loadPromptTemplate: vi.fn().mockResolvedValue('Template content'),
   interpolateTemplate: vi.fn(),
   mapColumnVariables: vi.fn(),
 }));
 
 const mockCallLLM = vi.fn();
-vi.mock('../../../utils/llm.js', () => ({
+vi.mock('../../src/utils/llm.js', () => ({
   callLLM: (...args: any[]) => mockCallLLM(...args),
 }));
 
-vi.mock('../../utils/fallback-descriptions.js', () => ({
+vi.mock('../../src/agents/documenter/utils/fallback-descriptions.js', () => ({
   generateColumnFallbackDescription: vi.fn(({ name, data_type }) => 
     `Column ${name} of type ${data_type}.`
   ),
@@ -77,7 +77,7 @@ describe('ColumnInferencer', () => {
 
   describe('infer', () => {
     it('should return description string (context quarantine)', async () => {
-      const { loadPromptTemplate } = await import('../../../utils/prompts.js');
+      const { loadPromptTemplate } = await import('../../src/utils/prompts.js');
       
       mockCallLLM.mockResolvedValue({
         content: 'Email address for user account.',
@@ -95,7 +95,7 @@ describe('ColumnInferencer', () => {
     });
 
     it('should handle LLM timeout with retry', async () => {
-      const { loadPromptTemplate } = await import('../../../utils/prompts.js');
+      const { loadPromptTemplate } = await import('../../src/utils/prompts.js');
       
       const timeoutError = {
         code: ErrorCodes.DOC_LLM_TIMEOUT,
@@ -123,7 +123,7 @@ describe('ColumnInferencer', () => {
     });
 
     it('should use fallback immediately on parse failure (no retry)', async () => {
-      const { loadPromptTemplate } = await import('../../../utils/prompts.js');
+      const { loadPromptTemplate } = await import('../../src/utils/prompts.js');
       
       const parseError = {
         code: ErrorCodes.DOC_LLM_PARSE_FAILED,
@@ -153,7 +153,7 @@ describe('ColumnInferencer', () => {
         tokens: { prompt: 100, completion: 5, total: 105 },
       });
 
-      const { loadPromptTemplate } = await import('../../../utils/prompts.js');
+      const { loadPromptTemplate } = await import('../../src/utils/prompts.js');
       vi.mocked(loadPromptTemplate).mockResolvedValue('Template');
 
       const inferencer = new ColumnInferencer(columnMetadata, tableContext);
@@ -170,7 +170,7 @@ describe('ColumnInferencer', () => {
         tokens: { prompt: 100, completion: 150, total: 250 },
       });
 
-      const { loadPromptTemplate } = await import('../../../utils/prompts.js');
+      const { loadPromptTemplate } = await import('../../src/utils/prompts.js');
       vi.mocked(loadPromptTemplate).mockResolvedValue('Template');
 
       const inferencer = new ColumnInferencer(columnMetadata, tableContext);
@@ -182,7 +182,7 @@ describe('ColumnInferencer', () => {
     });
 
     it('should enforce context quarantine (returns string only)', async () => {
-      const { loadPromptTemplate } = await import('../../../utils/prompts.js');
+      const { loadPromptTemplate } = await import('../../src/utils/prompts.js');
       
       vi.mocked(loadPromptTemplate).mockResolvedValue('Template');
       mockCallLLM.mockResolvedValue({

@@ -4,12 +4,12 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'fs';
-import { TableDocumenter } from '../TableDocumenter.js';
-import { ErrorCodes } from '../../errors.js';
-import type { WorkUnit, TableSpec } from '../../types.js';
+import { TableDocumenter } from '../../src/agents/documenter/sub-agents/TableDocumenter.js';
+import { ErrorCodes } from '../../src/agents/documenter/errors.js';
+import type { WorkUnit, TableSpec } from '../../src/agents/documenter/types.js';
 
 // Mock dependencies
-vi.mock('../../../utils/logger.js', () => ({
+vi.mock('../../src/utils/logger.js', () => ({
   logger: {
     debug: vi.fn(),
     warn: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock('../../../utils/logger.js', () => ({
   },
 }));
 
-vi.mock('../../../utils/prompts.js', () => ({
+vi.mock('../../src/utils/prompts.js', () => ({
   loadPromptTemplate: vi.fn().mockResolvedValue('This is a template with enough content to pass validation. It contains placeholder variables like {{variable}} that will be replaced during interpolation.'),
   interpolateTemplate: vi.fn((template, vars) => {
     let result = template;
@@ -34,11 +34,11 @@ vi.mock('../../../utils/prompts.js', () => ({
 }));
 
 const mockCallLLM = vi.fn();
-vi.mock('../../../utils/llm.js', () => ({
+vi.mock('../../src/utils/llm.js', () => ({
   callLLM: (...args: any[]) => mockCallLLM(...args),
 }));
 
-vi.mock('../../utils/fallback-descriptions.js', () => ({
+vi.mock('../../src/agents/documenter/utils/fallback-descriptions.js', () => ({
   generateTableFallbackDescription: vi.fn(({ table_name, column_count, row_count_approx }) =>
     `Table ${table_name} contains ${column_count} columns with approximately ${row_count_approx} rows.`
   ),
@@ -118,7 +118,7 @@ describe('TableDocumenter', () => {
         tokens: { prompt: 200, completion: 20, total: 220 },
       });
 
-      const { loadPromptTemplate } = await import('../../../utils/prompts.js');
+      const { loadPromptTemplate } = await import('../../src/utils/prompts.js');
       vi.mocked(loadPromptTemplate).mockResolvedValue('This is a template with enough content to pass validation. It contains placeholder variables like {{variable}} that will be replaced during interpolation.');
 
       vi.mocked(fs.mkdir).mockResolvedValue(undefined);
@@ -164,7 +164,7 @@ describe('TableDocumenter', () => {
         tokens: { prompt: 100, completion: 10, total: 110 },
       });
 
-      const { loadPromptTemplate } = await import('../../../utils/prompts.js');
+      const { loadPromptTemplate } = await import('../../src/utils/prompts.js');
       vi.mocked(loadPromptTemplate).mockResolvedValue('This is a template with enough content to pass validation. It contains placeholder variables like {{variable}} that will be replaced during interpolation.');
 
       vi.mocked(fs.mkdir).mockResolvedValue(undefined);
@@ -201,7 +201,7 @@ describe('TableDocumenter', () => {
         tokens: { prompt: 100, completion: 10, total: 110 },
       });
 
-      const { loadPromptTemplate } = await import('../../../utils/prompts.js');
+      const { loadPromptTemplate } = await import('../../src/utils/prompts.js');
       vi.mocked(loadPromptTemplate).mockResolvedValue('This is a template with enough content to pass validation. It contains placeholder variables like {{variable}} that will be replaced during interpolation.');
 
       vi.mocked(fs.mkdir).mockResolvedValue(undefined);
@@ -231,7 +231,7 @@ describe('TableDocumenter', () => {
         tokens: { prompt: 100, completion: 10, total: 110 },
       });
 
-      const { loadPromptTemplate } = await import('../../../utils/prompts.js');
+      const { loadPromptTemplate } = await import('../../src/utils/prompts.js');
       vi.mocked(loadPromptTemplate).mockResolvedValue('This is a template with enough content to pass validation. It contains placeholder variables like {{variable}} that will be replaced during interpolation.');
 
       vi.mocked(fs.mkdir).mockResolvedValue(undefined);
@@ -266,7 +266,7 @@ describe('TableDocumenter', () => {
         tokens: { prompt: 100, completion: 10, total: 110 },
       });
 
-      const { loadPromptTemplate } = await import('../../../utils/prompts.js');
+      const { loadPromptTemplate } = await import('../../src/utils/prompts.js');
       vi.mocked(loadPromptTemplate).mockResolvedValue('This is a template with enough content to pass validation. It contains placeholder variables like {{variable}} that will be replaced during interpolation.');
 
       vi.mocked(fs.mkdir).mockResolvedValue(undefined);
@@ -302,7 +302,7 @@ describe('TableDocumenter', () => {
         tokens: { prompt: 100, completion: 10, total: 110 },
       });
 
-      const { loadPromptTemplate } = await import('../../../utils/prompts.js');
+      const { loadPromptTemplate } = await import('../../src/utils/prompts.js');
       vi.mocked(loadPromptTemplate).mockResolvedValue('This is a template with enough content to pass validation. It contains placeholder variables like {{variable}} that will be replaced during interpolation.');
 
       // First write fails, retry succeeds

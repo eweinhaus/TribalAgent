@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { ErrorCodes } from '../errors.js';
+import { ErrorCodes } from '../../src/agents/documenter/errors.js';
 import { readFile } from 'fs/promises';
 import path from 'path';
 

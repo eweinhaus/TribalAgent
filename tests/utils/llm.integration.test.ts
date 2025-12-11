@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { callLLM } from '../llm.js';
+import { callLLM } from '../../src/utils/llm.js';
 
 describe('LLM Integration Tests', () => {
   const hasApiKey = !!process.env.OPENROUTER_API_KEY;

@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest';
 import {
   generateTableFallbackDescription,
   generateColumnFallbackDescription,
-} from '../utils/fallback-descriptions.js';
+} from '../../src/agents/documenter/utils/fallback-descriptions.js';
 
 describe('Fallback Descriptions', () => {
   describe('generateTableFallbackDescription', () => {

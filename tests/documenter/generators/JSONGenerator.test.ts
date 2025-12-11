@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { JSONGenerator } from '../JSONGenerator.js';
-import type { TableDocumentationData } from '../types.js';
+import { JSONGenerator } from '../../src/agents/documenter/generators/JSONGenerator.js';
+import type { TableDocumentationData } from '../../src/agents/documenter/generators/types.js';
 
 describe('JSONGenerator', () => {
   const createTestData = (overrides?: Partial<TableDocumentationData>): TableDocumentationData => ({

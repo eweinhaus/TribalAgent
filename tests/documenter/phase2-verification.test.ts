@@ -5,13 +5,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { ErrorCodes } from '../errors.js';
+import { ErrorCodes } from '../../src/agents/documenter/errors.js';
 import { readFile } from 'fs/promises';
 import path from 'path';
 import {
   mapTableVariables,
   mapColumnVariables,
-} from '../../../utils/prompts.js';
+} from '../../src/utils/prompts.js';
 
 describe('Phase 2 Verification', () => {
   describe('Error Code Compliance (Task 30)', () => {

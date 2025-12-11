@@ -5,8 +5,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'fs';
 import path from 'path';
-import { FileWriter } from '../file-writer.js';
-import { ErrorCodes } from '../../agents/documenter/errors.js';
+import { FileWriter } from '../../src/utils/file-writer.js';
+import { ErrorCodes } from '../../src/agents/documenter/errors.js';
 
 const TEST_DIR = path.join(process.cwd(), 'test-temp');
 

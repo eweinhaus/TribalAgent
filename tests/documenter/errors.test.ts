@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { createAgentError, ErrorCodes } from '../errors.js';
+import { createAgentError, ErrorCodes } from '../../src/agents/documenter/errors.js';
 
 describe('Error Handling', () => {
   describe('createAgentError', () => {

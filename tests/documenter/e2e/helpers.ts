@@ -10,7 +10,7 @@ import type {
   DocumentationPlan,
   DocumentationManifest,
   DocumenterProgress,
-} from '../../types.js';
+} from '../../src/agents/documenter/types.js';
 
 /**
  * Verify documentation files exist

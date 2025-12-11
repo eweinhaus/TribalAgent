@@ -5,8 +5,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { callLLM } from '../llm.js';
-import { ErrorCodes } from '../../agents/documenter/errors.js';
+import { callLLM } from '../../src/utils/llm.js';
+import { ErrorCodes } from '../../src/agents/documenter/errors.js';
 
 // Create a mock APIError class that matches OpenAI's APIError structure
 class MockAPIError extends Error {
@@ -38,7 +38,7 @@ vi.mock('openai', () => {
 import OpenAI from 'openai';
 
 // Mock logger
-vi.mock('../logger.js', () => ({
+vi.mock('../../src/utils/logger.js', () => ({
   logger: {
     debug: vi.fn(),
     warn: vi.fn(),

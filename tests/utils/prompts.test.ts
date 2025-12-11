@@ -14,7 +14,7 @@ import {
   mapTableVariables,
   mapColumnVariables,
   clearTemplateCache,
-} from '../prompts.js';
+} from '../../src/utils/prompts.js';
 
 // Mock fs
 vi.mock('fs', async () => {
@@ -30,7 +30,7 @@ vi.mock('fs', async () => {
 });
 
 // Mock logger
-vi.mock('../logger.js', () => ({
+vi.mock('../../src/utils/logger.js', () => ({
   logger: {
     debug: vi.fn(),
     warn: vi.fn(),

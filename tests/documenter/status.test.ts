@@ -7,8 +7,8 @@ import {
   computeTableStatus,
   computeWorkUnitStatus,
   computeOverallStatus,
-} from '../status.js';
-import type { WorkUnitProgress, TableResult } from '../types.js';
+} from '../../src/agents/documenter/status.js';
+import type { WorkUnitProgress, TableResult } from '../../src/agents/documenter/types.js';
 
 describe('Status Computation', () => {
   describe('computeTableStatus', () => {
