@@ -256,3 +256,15 @@ function initializeProgress(plan: DocumentationPlan): DocumenterProgress {
     errors: [],
   };
 }
+
+// Run if executed directly (check if this file is being run as main module)
+// For tsx/ts-node, we check if import.meta.url ends with the script path
+const isMainModule = import.meta.url.endsWith('documenter/index.ts') || 
+                     import.meta.url.includes('documenter/index.ts') ||
+                     process.argv[1]?.includes('documenter/index');
+if (isMainModule || import.meta.url === `file://${process.argv[1]}`) {
+  runDocumenter().catch((error) => {
+    logger.error('Documenter failed', error);
+    process.exit(1);
+  });
+}

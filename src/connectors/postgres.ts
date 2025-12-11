@@ -14,6 +14,15 @@ export class PostgresConnector implements DatabaseConnector {
   async connect(connectionString: string): Promise<void> {
     try {
       this.client = new Client({ connectionString });
+      // Attach error handler to prevent unhandled error crashes on connection termination
+      this.client.on('error', (err) => {
+        // Suppress expected client-initiated shutdown messages
+        if (err?.message?.includes('client_termination') || err?.message?.includes('shutdown')) {
+          logger.debug('PostgreSQL connection closed');
+          return;
+        }
+        logger.warn('PostgreSQL client error (connection may have been terminated)', { error: err?.message });
+      });
       await this.client.connect();
       logger.debug('Connected to PostgreSQL database');
     } catch (error) {

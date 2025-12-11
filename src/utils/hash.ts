@@ -44,7 +44,8 @@ export function computeSchemaHash(tables: TableMetadata[]): ContentHash {
   const hashInput = sortedTables.map((table) => ({
     name: table.name || `${table.table_schema}.${table.table_name}`,
     columns: (table.columns || [])
-      .sort((a, b) => a.column_name.localeCompare(b.column_name))
+      .filter((col) => col.column_name)
+      .sort((a, b) => (a.column_name || '').localeCompare(b.column_name || ''))
       .map((col) => `${col.column_name}:${col.data_type}:${col.is_nullable}`),
   }));
 
@@ -59,7 +60,8 @@ export function computeTableMetadataHash(table: TableMetadata): ContentHash {
   const hashInput = {
     name: table.name || `${table.table_schema}.${table.table_name}`,
     columns: (table.columns || [])
-      .sort((a, b) => a.column_name.localeCompare(b.column_name))
+      .filter((col) => col.column_name)
+      .sort((a, b) => (a.column_name || '').localeCompare(b.column_name || ''))
       .map((col) => ({
         name: col.column_name,
         type: col.data_type,
@@ -68,7 +70,8 @@ export function computeTableMetadataHash(table: TableMetadata): ContentHash {
       })),
     primaryKey: table.primary_key?.sort(),
     foreignKeys: (table.foreign_keys || [])
-      .sort((a, b) => a.constraint_name.localeCompare(b.constraint_name))
+      .filter((fk) => fk.constraint_name)
+      .sort((a, b) => (a.constraint_name || '').localeCompare(b.constraint_name || ''))
       .map((fk) => `${fk.column_name}->${fk.referenced_table}`),
   };
 

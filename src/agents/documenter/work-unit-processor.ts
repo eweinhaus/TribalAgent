@@ -169,7 +169,6 @@ async function processWorkUnit(
     // Connect to database
     await connector.connect(connectionString);
     connectionEstablished = true;
-    connectionEstablished = true;
 
     // Process tables
     const tableResults = await processTablesInWorkUnit(workUnit, connector);
@@ -242,6 +241,13 @@ async function processWorkUnit(
     
     throw error; // Re-throw to be caught by caller
   } finally {
+    // Disconnect from database to prevent connection leaks
+    try {
+      await connector.disconnect();
+    } catch (disconnectError) {
+      logger.warn('Failed to disconnect from database', { workUnitId: workUnit.id, error: disconnectError });
+    }
+    
     // Save final work unit progress
     await saveWorkUnitProgress(workUnit.id, workUnitProgress);
     
