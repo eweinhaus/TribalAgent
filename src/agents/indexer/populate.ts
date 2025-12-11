@@ -284,7 +284,11 @@ export function populateIndex(
   `);
 
   // Note: documents_vec uses document_id column (not id) to match expected schema
-  const insertVec = db.prepare(`
+  // vec0 doesn't support parameterized queries for vec_f32() - must use direct SQL
+  const deleteVecById = db.prepare(`DELETE FROM documents_vec WHERE document_id = ?`);
+  
+  // Prepared statement for blob fallback (when vec0 unavailable)
+  const insertVecBlob = db.prepare(`
     INSERT OR REPLACE INTO documents_vec (document_id, embedding) VALUES (?, ?)
   `);
 
@@ -358,14 +362,24 @@ export function populateIndex(
         }
         
         if (embedding) {
-          // vec0 virtual table expects JSON array, blob fallback expects BLOB
+          // vec0 virtual table with float[1536] expects JSON array string, blob fallback expects BLOB
           if (isSqliteVecAvailable()) {
-            // Insert as JSON array for vec0 (float[1536])
-            insertVec.run(docId, JSON.stringify(embedding));
+            // vec0's float[1536] column type expects JSON array string
+            const embeddingJson = JSON.stringify(embedding);
+            
+            // Delete existing row first (vec0 doesn't support INSERT OR REPLACE)
+            deleteVecById.run(docId);
+            
+            // vec0 requires direct SQL construction with vec_f32() - parameterized queries don't work
+            // Escape single quotes in JSON to prevent SQL injection (JSON strings shouldn't contain unescaped quotes anyway)
+            const escapedJson = embeddingJson.replace(/'/g, "''");
+            const insertSql = `INSERT INTO documents_vec (document_id, embedding) VALUES (${docId}, vec_f32('${escapedJson}'))`;
+            
+            db.exec(insertSql);
           } else {
             // Insert as BLOB for fallback storage
             const embeddingBlob = float32ArrayToBlob(embedding);
-            insertVec.run(docId, embeddingBlob);
+            insertVecBlob.run(docId, embeddingBlob);
           }
         } else {
           // Remove any stale embedding
