@@ -45,3 +45,6 @@ temp/
 .cursor/
 
 planning/
+
+# Memory Bank
+memory-bank/
