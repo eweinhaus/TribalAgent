@@ -253,19 +253,32 @@ async function generateEmbeddingsWithRetry(texts: string[]): Promise<number[][]>
 
 /**
  * Generate a unique identifier for a document
+ * IMPORTANT: This must match the filePath used in populateIndex for embedding lookup
  */
 function getDocumentId(doc: ParsedDocument): string {
+  // Use the same identity format as populate.ts getDocumentIdentity()
+  // This ensures embeddings can be looked up by file path or identity
   switch (doc.docType) {
-    case 'table':
-      return `table:${doc.database}.${doc.schema}.${doc.table}`;
-    case 'column':
-      return `column:${doc.database}.${doc.schema}.${doc.table}.${doc.column}`;
-    case 'domain':
-      return `domain:${doc.database}.${doc.domain}`;
-    case 'relationship':
-      return `relationship:${doc.database}.${doc.sourceTable}->${doc.targetTable}`;
-    case 'overview':
-      return `overview:${doc.database}.${doc.title}`;
+    case 'table': {
+      const tableDoc = doc as ParsedTableDoc;
+      return `${tableDoc.database}.${tableDoc.schema}.${tableDoc.table}`;
+    }
+    case 'column': {
+      const colDoc = doc as ParsedColumnDoc;
+      return `${colDoc.database}.${colDoc.schema}.${colDoc.table}.${colDoc.column}`;
+    }
+    case 'domain': {
+      const domainDoc = doc as ParsedDomainDoc;
+      return `${domainDoc.database}.${domainDoc.domain}`;
+    }
+    case 'relationship': {
+      const relDoc = doc as ParsedRelationshipDoc;
+      return `${relDoc.database}.${relDoc.sourceTable}_to_${relDoc.targetTable}`;
+    }
+    case 'overview': {
+      const overDoc = doc as ParsedOverviewDoc;
+      return `${overDoc.database}.overview`;
+    }
     default:
       return `unknown:${Date.now()}`;
   }

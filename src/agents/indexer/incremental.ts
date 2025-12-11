@@ -113,7 +113,8 @@ export async function deleteDocumentsWithCascade(
   `);
 
   const deleteDocStmt = db.prepare('DELETE FROM documents WHERE id = ?');
-  const deleteVecStmt = db.prepare('DELETE FROM documents_vec WHERE id = ?');
+  // Note: documents_vec uses document_id column (not id)
+  const deleteVecStmt = db.prepare('DELETE FROM documents_vec WHERE document_id = ?');
   const deleteChildDocsStmt = db.prepare('DELETE FROM documents WHERE parent_doc_id = ?');
 
   const getChildIdsStmt = db.prepare('SELECT id FROM documents WHERE parent_doc_id = ?');
@@ -219,11 +220,12 @@ export function cleanupOrphanedDocuments(db: DatabaseType): number {
 
 /**
  * Clean up orphaned vectors (vectors without valid document)
+ * Note: documents_vec uses document_id column (not id)
  */
 export function cleanupOrphanedVectors(db: DatabaseType): number {
   const result = db.prepare(`
     DELETE FROM documents_vec
-    WHERE id NOT IN (SELECT id FROM documents)
+    WHERE document_id NOT IN (SELECT id FROM documents)
   `).run();
 
   if (result.changes > 0) {

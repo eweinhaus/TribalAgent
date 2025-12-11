@@ -406,6 +406,12 @@ function splitTextIntoChunks(text: string, maxChars: number): string[] {
 
 /**
  * Generate embeddings using OpenAI
+ * 
+ * IMPORTANT: OpenAI's text-embedding-3-small has an 8192 token limit.
+ * This function automatically:
+ * - Splits oversized documents into chunks
+ * - Averages chunk embeddings back to single embedding
+ * - Skips empty/invalid texts with warnings
  */
 export async function generateEmbeddings(
   texts: string[],
@@ -415,21 +421,35 @@ export async function generateEmbeddings(
 
   logger.debug(`Generating embeddings for ${texts.length} texts using ${model}`);
 
-  // Process in batches to avoid API limits
-  // OpenAI embedding model has 8192 token limit per batch
-  // Use conservative estimate: ~3 chars per token (actual observed: 3.14)
-  const MAX_TOKENS_PER_BATCH = 7000; // Leave good margin from 8192 limit
-  const CHARS_PER_TOKEN = 3;
-  const MAX_CHARS_PER_BATCH = Math.floor(MAX_TOKENS_PER_BATCH * CHARS_PER_TOKEN); // 21000 chars
-  const MAX_CHARS_PER_DOC = Math.floor(7000 * CHARS_PER_TOKEN); // 21000 chars max for single doc
+  // OpenAI text-embedding-3-small has 8192 token limit
+  // Use conservative estimate: ~4 chars per token for safety margin
+  // This prevents "context window exceeded" errors
+  const MAX_TOKENS_PER_DOC = 7500;  // Leave margin from 8192 limit
+  const CHARS_PER_TOKEN = 4;        // Conservative estimate
+  const MAX_CHARS_PER_DOC = Math.floor(MAX_TOKENS_PER_DOC * CHARS_PER_TOKEN); // 30000 chars
+  const MAX_CHARS_PER_BATCH = 80000; // Batch limit for API calls
 
   // Split oversized texts into multiple chunks, track original indices
   const processedTexts: string[] = [];
   const originalIndices: number[] = []; // Maps processed index -> original index
+  let skippedCount = 0;
 
   for (let i = 0; i < texts.length; i++) {
     const text = texts[i];
+    
+    // Skip empty or invalid texts
+    if (!text || text.trim().length === 0) {
+      logger.warn(`Skipping empty text at index ${i}`);
+      skippedCount++;
+      continue;
+    }
+
     if (text.length > MAX_CHARS_PER_DOC) {
+      const estimatedTokens = Math.ceil(text.length / CHARS_PER_TOKEN);
+      logger.warn(
+        `Document ${i} exceeds embedding token limit: ~${estimatedTokens} tokens (${text.length} chars). ` +
+        `Splitting into chunks to avoid 8k context window error.`
+      );
       const chunks = splitTextIntoChunks(text, MAX_CHARS_PER_DOC);
       logger.info(`Split oversized embedding text: ${text.length} chars -> ${chunks.length} chunks`);
       for (const chunk of chunks) {
@@ -440,6 +460,15 @@ export async function generateEmbeddings(
       processedTexts.push(text);
       originalIndices.push(i);
     }
+  }
+
+  if (skippedCount > 0) {
+    logger.warn(`Skipped ${skippedCount} empty/invalid texts during embedding generation`);
+  }
+
+  if (processedTexts.length === 0) {
+    logger.warn('No valid texts to embed after filtering');
+    return [];
   }
   
   const allEmbeddings: number[][] = [];
@@ -452,13 +481,25 @@ export async function generateEmbeddings(
 
     // If adding this text would exceed the limit, process current batch first
     if (currentBatchChars + textChars > MAX_CHARS_PER_BATCH && currentBatch.length > 0) {
-      const response = await client.embeddings.create({
-        model,
-        input: currentBatch,
-      });
+      try {
+        const response = await client.embeddings.create({
+          model,
+          input: currentBatch,
+        });
 
-      const batchEmbeddings = response.data.map((item) => item.embedding);
-      allEmbeddings.push(...batchEmbeddings);
+        const batchEmbeddings = response.data.map((item) => item.embedding);
+        allEmbeddings.push(...batchEmbeddings);
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        if (errMsg.includes('maximum context length') || errMsg.includes('8192')) {
+          logger.error(
+            `Embedding batch exceeded 8k token limit despite chunking. ` +
+            `Batch had ${currentBatch.length} texts, ${currentBatchChars} chars. ` +
+            `Try reducing MAX_CHARS_PER_DOC.`
+          );
+        }
+        throw error;
+      }
       
       // Reset batch
       currentBatch = [];
@@ -474,29 +515,54 @@ export async function generateEmbeddings(
 
   // Process remaining batch
   if (currentBatch.length > 0) {
-    const response = await client.embeddings.create({
-      model,
-      input: currentBatch,
-    });
+    try {
+      const response = await client.embeddings.create({
+        model,
+        input: currentBatch,
+      });
 
-    const batchEmbeddings = response.data.map((item) => item.embedding);
-    allEmbeddings.push(...batchEmbeddings);
+      const batchEmbeddings = response.data.map((item) => item.embedding);
+      allEmbeddings.push(...batchEmbeddings);
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      if (errMsg.includes('maximum context length') || errMsg.includes('8192')) {
+        logger.error(
+          `Embedding batch exceeded 8k token limit despite chunking. ` +
+          `Batch had ${currentBatch.length} texts, ${currentBatchChars} chars. ` +
+          `Try reducing MAX_CHARS_PER_DOC.`
+        );
+      }
+      throw error;
+    }
   }
 
   // For documents that were split, average their chunk embeddings
+  // Build a map of original index -> embeddings for that index
+  const embeddingsByOrigIdx = new Map<number, number[][]>();
+  for (let i = 0; i < originalIndices.length; i++) {
+    const origIdx = originalIndices[i];
+    if (!embeddingsByOrigIdx.has(origIdx)) {
+      embeddingsByOrigIdx.set(origIdx, []);
+    }
+    embeddingsByOrigIdx.get(origIdx)!.push(allEmbeddings[i]);
+  }
+
+  // Build final embeddings array, handling skipped texts
   const finalEmbeddings: number[][] = [];
-  let i = 0;
   for (let origIdx = 0; origIdx < texts.length; origIdx++) {
-    const chunkEmbeddings: number[][] = [];
-    while (i < originalIndices.length && originalIndices[i] === origIdx) {
-      chunkEmbeddings.push(allEmbeddings[i]);
-      i++;
+    const chunkEmbeddings = embeddingsByOrigIdx.get(origIdx);
+    
+    if (!chunkEmbeddings || chunkEmbeddings.length === 0) {
+      // This text was skipped (empty/invalid) - use zero vector as placeholder
+      // The indexer will handle missing embeddings gracefully
+      continue;
     }
     
     if (chunkEmbeddings.length === 1) {
       finalEmbeddings.push(chunkEmbeddings[0]);
-    } else if (chunkEmbeddings.length > 1) {
+    } else {
       // Average the embeddings for split documents
+      logger.debug(`Averaging ${chunkEmbeddings.length} chunk embeddings for document ${origIdx}`);
       const avgEmbedding = chunkEmbeddings[0].map((_, dim) => {
         const sum = chunkEmbeddings.reduce((acc, emb) => acc + emb[dim], 0);
         return sum / chunkEmbeddings.length;

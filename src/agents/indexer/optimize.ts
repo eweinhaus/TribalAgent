@@ -163,9 +163,10 @@ export function verifyIndexIntegrity(db: DatabaseType): string[] {
   const issues: string[] = [];
 
   // Check for orphaned vectors
+  // Note: documents_vec uses document_id column (not id)
   const orphanedVecs = db.prepare(`
     SELECT COUNT(*) as count FROM documents_vec
-    WHERE id NOT IN (SELECT id FROM documents)
+    WHERE document_id NOT IN (SELECT id FROM documents)
   `).get() as { count: number };
 
   if (orphanedVecs.count > 0) {
@@ -185,9 +186,10 @@ export function verifyIndexIntegrity(db: DatabaseType): string[] {
   }
 
   // Check for documents without embeddings
+  // Note: documents_vec uses document_id column (not id)
   const docsWithoutEmb = db.prepare(`
     SELECT COUNT(*) as count FROM documents
-    WHERE id NOT IN (SELECT id FROM documents_vec)
+    WHERE id NOT IN (SELECT document_id FROM documents_vec)
   `).get() as { count: number };
 
   if (docsWithoutEmb.count > 0) {

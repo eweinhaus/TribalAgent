@@ -6,7 +6,7 @@
  */
 
 import { Database as DatabaseType } from 'better-sqlite3';
-import {
+import type {
   ParsedDocument,
   ParsedTableDoc,
   ParsedColumnDoc,
@@ -152,6 +152,29 @@ export function getDocumentIdentity(doc: ParsedDocument): string {
 }
 
 /**
+ * Build document identity from ProcessedDocument
+ * Must match the format used in embeddings.ts getDocumentId()
+ */
+function buildDocumentIdentity(doc: ProcessedDocument): string {
+  switch (doc.docType) {
+    case 'table':
+      return `${doc.database}.${doc.schema}.${doc.table}`;
+    case 'column':
+      return `${doc.database}.${doc.schema}.${doc.table}.${doc.column}`;
+    case 'domain':
+      return `${doc.database}.${doc.domain}`;
+    case 'relationship':
+      // For relationships, we need source_to_target format
+      // But ProcessedDocument only has table (source), we'll try a pattern match
+      return `${doc.database}.${doc.table}_to_`;  // Partial match
+    case 'overview':
+      return `${doc.database}.overview`;
+    default:
+      return 'unknown';
+  }
+}
+
+/**
  * Find modified_at for a document with exact matching
  */
 export function findModifiedAt(doc: ParsedDocument, files: IndexableFile[]): string {
@@ -260,12 +283,13 @@ export function populateIndex(
     RETURNING id, (changes() = 0) as was_update
   `);
 
+  // Note: documents_vec uses document_id column (not id) to match expected schema
   const insertVec = db.prepare(`
-    INSERT OR REPLACE INTO documents_vec (id, embedding) VALUES (?, ?)
+    INSERT OR REPLACE INTO documents_vec (document_id, embedding) VALUES (?, ?)
   `);
 
   const deleteVec = db.prepare(`
-    DELETE FROM documents_vec WHERE id = ?
+    DELETE FROM documents_vec WHERE document_id = ?
   `);
 
   // Use transaction for atomicity
@@ -312,8 +336,27 @@ export function populateIndex(
           parentDocIds.set(doc.filePath, docId);
         }
 
-        // Handle embedding
-        const embedding = embeddings.get(doc.filePath);
+        // Handle embedding - try both filePath and document identity as keys
+        // The identity key format matches what embeddings.ts uses
+        const docIdentity = buildDocumentIdentity(doc);
+        
+        let embedding = embeddings.get(doc.filePath);
+        if (!embedding) {
+          // Fallback: try document identity key (used by embeddings.ts)
+          embedding = embeddings.get(docIdentity);
+        }
+        
+        // For relationships, try partial match on keys (since we may not have full info)
+        if (!embedding && doc.docType === 'relationship') {
+          const prefix = `${doc.database}.${doc.table}_to_`;
+          for (const [key, emb] of embeddings) {
+            if (key.startsWith(prefix)) {
+              embedding = emb;
+              break;
+            }
+          }
+        }
+        
         if (embedding) {
           const embeddingBlob = float32ArrayToBlob(embedding);
           insertVec.run(docId, embeddingBlob);

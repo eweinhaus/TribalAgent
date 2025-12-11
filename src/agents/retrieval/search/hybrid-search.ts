@@ -169,6 +169,7 @@ export class HybridSearch {
 
   /**
    * Perform vector similarity search
+   * Note: documents_vec uses document_id column (not id)
    */
   private performVectorSearch(embedding: Buffer, database?: string, domain?: string): any[] {
     try {
@@ -186,7 +187,7 @@ export class HybridSearch {
           d.keywords,
           vec.embedding
         FROM documents_vec vec
-        JOIN documents d ON vec.id = d.id
+        JOIN documents d ON vec.document_id = d.id
         WHERE d.doc_type = 'table'
       `;
 
