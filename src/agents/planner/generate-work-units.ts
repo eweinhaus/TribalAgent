@@ -136,8 +136,9 @@ function createTableSpec(
     domain,
     priority,
     column_count: metadata.columns?.length || 0,
-    // PostgreSQL returns bigint as string, ensure it's a number
-    row_count_approx: Number(metadata.row_count) || 0,
+    // PostgreSQL returns bigint as string, ensure it's a non-negative number
+    // reltuples returns -1 for tables that haven't been analyzed
+    row_count_approx: Math.max(0, Number(metadata.row_count) || 0),
     incoming_fk_count: incomingFkCount,
     outgoing_fk_count: outgoingFkCount,
     metadata_hash: metadataHash,
