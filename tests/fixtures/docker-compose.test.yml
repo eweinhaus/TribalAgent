@@ -1,0 +1,36 @@
+# Docker Compose for Planner Integration Tests
+# Per plan §7.2a - test container setup
+#
+# Usage:
+#   docker-compose -f tests/fixtures/docker-compose.test.yml up -d
+#   npm run test:integration
+#   docker-compose -f tests/fixtures/docker-compose.test.yml down
+
+version: '3.8'
+
+services:
+  postgres-test:
+    image: postgres:15-alpine
+    container_name: tribal-knowledge-test-db
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: testdb
+    ports:
+      - "5433:5432"  # Use non-standard port to avoid conflicts
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d testdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Optional: Snowflake mock for testing (placeholder)
+  # In real tests, you would use a Snowflake trial account
+  # or mock the connector at the code level
+
+networks:
+  default:
+    name: tribal-knowledge-test-network

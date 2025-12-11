@@ -13,6 +13,7 @@ import {
   AgentError,
 } from './types.js';
 import { computeStableManifestHash } from './manifest.js';
+import { loadConfig } from './config.js';
 import { logger } from '../../utils/logger.js';
 
 // =============================================================================
@@ -20,7 +21,18 @@ import { logger } from '../../utils/logger.js';
 // =============================================================================
 
 const PROGRESS_PATH = 'progress/indexer-progress.json';
-const CHECKPOINT_INTERVAL = 100;  // Save every 100 files
+
+// Checkpoint interval loaded from config (with fallback default)
+let checkpointInterval: number | null = null;
+
+async function getCheckpointIntervalFromConfig(): Promise<number> {
+  if (checkpointInterval !== null) {
+    return checkpointInterval;
+  }
+  const config = await loadConfig();
+  checkpointInterval = config.checkpoint_interval;
+  return checkpointInterval;
+}
 
 // =============================================================================
 // Progress Initialization
@@ -177,9 +189,19 @@ export function updateProgressForFile(
 
 /**
  * Check if checkpoint should be saved (based on interval)
+ * Note: Uses cached interval after first call for synchronous behavior
  */
 export function shouldSaveCheckpoint(progress: IndexerProgress): boolean {
-  return progress.files_indexed % CHECKPOINT_INTERVAL === 0;
+  // Use cached value or default if not yet loaded
+  const interval = checkpointInterval ?? 100;
+  return progress.files_indexed % interval === 0;
+}
+
+/**
+ * Initialize checkpoint interval from config (call at startup)
+ */
+export async function initializeCheckpointInterval(): Promise<void> {
+  await getCheckpointIntervalFromConfig();
 }
 
 /**
@@ -324,5 +346,5 @@ export function getProgressSummary(progress: IndexerProgress): string {
  * Get checkpoint interval
  */
 export function getCheckpointInterval(): number {
-  return CHECKPOINT_INTERVAL;
+  return checkpointInterval ?? 100;
 }

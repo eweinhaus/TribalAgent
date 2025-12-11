@@ -37,15 +37,58 @@ import {
 import { logger } from '../../../utils/logger.js';
 
 // =============================================================================
+// Parse Timeout Configuration
+// =============================================================================
+
+// Default timeout for parsing a single file (5 seconds)
+const DEFAULT_PARSE_TIMEOUT_MS = 5000;
+
+/**
+ * Wraps a synchronous parsing operation with a timeout
+ * Returns a promise that rejects if parsing takes too long
+ */
+function withTimeout<T>(
+  operation: () => T,
+  timeoutMs: number,
+  filePath: string
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    // Use setImmediate to allow timeout check
+    const timeoutId = setTimeout(() => {
+      reject(new IndexerError(
+        'IDX_PARSE_FAILED',
+        `Parse timeout exceeded (${timeoutMs}ms) for file: ${filePath}`,
+        true,
+        { path: filePath, timeoutMs }
+      ));
+    }, timeoutMs);
+
+    try {
+      const result = operation();
+      clearTimeout(timeoutId);
+      resolve(result);
+    } catch (error) {
+      clearTimeout(timeoutId);
+      reject(error);
+    }
+  });
+}
+
+// =============================================================================
 // Main Document Parser Dispatcher
 // =============================================================================
 
 /**
  * Main document parsing dispatcher
  * Routes to the appropriate parser based on file type from manifest
+ * Includes timeout protection to prevent hanging on malformed files
  */
-export async function parseDocument(file: IndexableFile): Promise<ParsedDocument> {
+export async function parseDocument(
+  file: IndexableFile,
+  options: { timeoutMs?: number } = {}
+): Promise<ParsedDocument> {
   const filePath = path.join(process.cwd(), 'docs', file.path);
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PARSE_TIMEOUT_MS;
   let content: string;
 
   try {
@@ -60,27 +103,30 @@ export async function parseDocument(file: IndexableFile): Promise<ParsedDocument
   }
 
   try {
-    switch (file.type) {
-      case 'table':
-        return parseTableDocument(file.path, content);
+    // Apply timeout to the parsing operation
+    return await withTimeout(() => {
+      switch (file.type) {
+        case 'table':
+          return parseTableDocument(file.path, content);
 
-      case 'domain':
-        return parseDomainDocument(file.path, content);
+        case 'domain':
+          return parseDomainDocument(file.path, content);
 
-      case 'overview':
-        return parseOverviewDocument(file.path, content);
+        case 'overview':
+          return parseOverviewDocument(file.path, content);
 
-      case 'relationship':
-        return parseRelationshipDocument(file.path, content);
+        case 'relationship':
+          return parseRelationshipDocument(file.path, content);
 
-      default:
-        throw new IndexerError(
-          'IDX_PARSE_FAILED',
-          `Unknown document type: ${file.type}`,
-          true,
-          { path: file.path, type: file.type }
-        );
-    }
+        default:
+          throw new IndexerError(
+            'IDX_PARSE_FAILED',
+            `Unknown document type: ${file.type}`,
+            true,
+            { path: file.path, type: file.type }
+          );
+      }
+    }, timeoutMs, file.path);
   } catch (error) {
     if (error instanceof IndexerError) throw error;
 

@@ -3,6 +3,11 @@
  *
  * Creates and initializes the SQLite database schema for the Tribal Knowledge index.
  * Includes tables for documents, FTS5 search, vector embeddings, and relationships.
+ *
+ * Vector Storage Strategy:
+ * - Attempts to load sqlite-vec extension for native vector operations
+ * - Falls back to blob storage if extension is unavailable
+ * - Retriever must handle both cases (vec0 operators vs manual cosine similarity)
  */
 
 import { promises as fs } from 'fs';
@@ -15,6 +20,46 @@ import { logger } from '../../../utils/logger.js';
 // =============================================================================
 
 let dbInstance: DatabaseType | null = null;
+let sqliteVecAvailable = false;
+
+/**
+ * Attempt to load sqlite-vec extension
+ * Returns true if successful, false otherwise
+ */
+function tryLoadSqliteVec(db: DatabaseType): boolean {
+  // Common paths where sqlite-vec might be installed
+  const extensionPaths = [
+    // npm installed
+    path.join(process.cwd(), 'node_modules', 'sqlite-vec', 'dist', 'vec0'),
+    // System paths
+    '/usr/local/lib/sqlite-vec/vec0',
+    '/usr/lib/sqlite-vec/vec0',
+    // Homebrew on macOS
+    '/opt/homebrew/lib/sqlite-vec/vec0',
+    '/usr/local/opt/sqlite-vec/lib/vec0',
+  ];
+
+  for (const extPath of extensionPaths) {
+    try {
+      db.loadExtension(extPath);
+      logger.info(`Loaded sqlite-vec extension from ${extPath}`);
+      return true;
+    } catch {
+      // Try next path
+    }
+  }
+
+  // Try loading without path (system default)
+  try {
+    db.loadExtension('vec0');
+    logger.info('Loaded sqlite-vec extension from system path');
+    return true;
+  } catch {
+    // Extension not available
+  }
+
+  return false;
+}
 
 /**
  * Open or create the database
@@ -32,6 +77,13 @@ export async function openDatabase(dbPath?: string): Promise<DatabaseType> {
 
   // Enable WAL mode for better concurrent access
   db.pragma('journal_mode = WAL');
+
+  // Try to load sqlite-vec extension
+  sqliteVecAvailable = tryLoadSqliteVec(db);
+  if (!sqliteVecAvailable) {
+    logger.warn('sqlite-vec extension not available - using blob storage fallback for vectors');
+    logger.debug('Vector similarity search will use manual cosine similarity in the Retriever');
+  }
 
   // Initialize schema
   await initializeSchema(db);
@@ -60,6 +112,14 @@ export function closeDatabase(db: DatabaseType): void {
  */
 export function getDatabase(): DatabaseType | null {
   return dbInstance;
+}
+
+/**
+ * Check if sqlite-vec extension is available
+ * Used by Retriever to determine vector search strategy
+ */
+export function isSqliteVecAvailable(): boolean {
+  return sqliteVecAvailable;
 }
 
 // =============================================================================
@@ -138,15 +198,46 @@ export async function initializeSchema(db: DatabaseType): Promise<void> {
     END;
   `);
 
-  // Vector embeddings table (fallback blob storage)
-  // Using blob storage for compatibility - sqlite-vec can be used if available
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS documents_vec (
-      id INTEGER PRIMARY KEY,
-      embedding BLOB NOT NULL,          -- 1536 * 4 bytes = 6144 bytes per embedding
-      FOREIGN KEY (id) REFERENCES documents(id) ON DELETE CASCADE
-    );
-  `);
+  // Vector embeddings table
+  // Uses vec0 virtual table if sqlite-vec is available, otherwise falls back to blob storage
+  if (sqliteVecAvailable) {
+    // Check if vec0 table already exists (can't use IF NOT EXISTS with virtual tables)
+    const vecTableExists = db.prepare(`
+      SELECT name FROM sqlite_master WHERE type='table' AND name='documents_vec'
+    `).get();
+
+    if (!vecTableExists) {
+      try {
+        db.exec(`
+          CREATE VIRTUAL TABLE documents_vec USING vec0(
+            id INTEGER PRIMARY KEY,
+            embedding FLOAT[1536]
+          );
+        `);
+        logger.debug('Created documents_vec using vec0 virtual table');
+      } catch (error) {
+        // Fall back to blob storage if vec0 creation fails
+        logger.warn('Failed to create vec0 table, falling back to blob storage', error);
+        sqliteVecAvailable = false;
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS documents_vec (
+            id INTEGER PRIMARY KEY,
+            embedding BLOB NOT NULL,
+            FOREIGN KEY (id) REFERENCES documents(id) ON DELETE CASCADE
+          );
+        `);
+      }
+    }
+  } else {
+    // Fallback: blob storage for compatibility
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS documents_vec (
+        id INTEGER PRIMARY KEY,
+        embedding BLOB NOT NULL,          -- 1536 * 4 bytes = 6144 bytes per embedding
+        FOREIGN KEY (id) REFERENCES documents(id) ON DELETE CASCADE
+      );
+    `);
+  }
 
   // Relationships table - stores FK relationships and computed multi-hop paths
   db.exec(`
@@ -299,4 +390,51 @@ export function clearAllData(db: DatabaseType): void {
   })();
 
   logger.info('All indexed data cleared');
+}
+
+/**
+ * Populate the keywords table with extracted keywords
+ * Updates frequency counts for existing keywords
+ */
+export function populateKeywords(
+  db: DatabaseType,
+  keywords: Array<{ term: string; sourceType: string }>
+): { inserted: number; updated: number } {
+  const stats = { inserted: 0, updated: 0 };
+
+  const upsertKeyword = db.prepare(`
+    INSERT INTO keywords (term, source_type, frequency)
+    VALUES (?, ?, 1)
+    ON CONFLICT(term) DO UPDATE SET
+      frequency = frequency + 1
+    RETURNING (changes() = 0) as was_update
+  `);
+
+  db.transaction(() => {
+    for (const { term, sourceType } of keywords) {
+      const result = upsertKeyword.get(term.toLowerCase(), sourceType) as { was_update: number } | undefined;
+      if (result?.was_update === 1) {
+        stats.updated++;
+      } else {
+        stats.inserted++;
+      }
+    }
+  })();
+
+  return stats;
+}
+
+/**
+ * Get keyword frequencies for reporting
+ */
+export function getKeywordStats(db: DatabaseType): { totalTerms: number; uniqueTerms: number; topTerms: Array<{ term: string; frequency: number }> } {
+  const totalRow = db.prepare('SELECT SUM(frequency) as total FROM keywords').get() as { total: number | null };
+  const uniqueRow = db.prepare('SELECT COUNT(*) as count FROM keywords').get() as { count: number };
+  const topTerms = db.prepare('SELECT term, frequency FROM keywords ORDER BY frequency DESC LIMIT 20').all() as Array<{ term: string; frequency: number }>;
+
+  return {
+    totalTerms: totalRow?.total ?? 0,
+    uniqueTerms: uniqueRow.count,
+    topTerms,
+  };
 }

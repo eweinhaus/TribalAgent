@@ -18,7 +18,7 @@ import {
   IndexStats,
 } from './types.js';
 import { validateAndLoadManifest, getValidFiles } from './manifest.js';
-import { openDatabase, closeDatabase } from './database/init.js';
+import { openDatabase, closeDatabase, clearAllData, populateKeywords } from './database/init.js';
 import { parseDocument } from './parsers/documents.js';
 import { generateColumnDocuments, findFilePathForTable } from './parsers/columns.js';
 import { extractKeywordsForDocument } from './keywords.js';
@@ -51,7 +51,11 @@ import {
   updateProgressForFile,
   updateDocTypeCounts,
   updateEmbeddingStats,
+  updateTimingStats,
+  deleteCheckpoint,
+  initializeCheckpointInterval,
 } from './progress.js';
+import { loadConfig } from './config.js';
 import {
   optimizeDatabase,
   getIndexStats,
@@ -77,12 +81,26 @@ export async function runIndexer(options: IndexerOptions = {}): Promise<void> {
   try {
     logger.info('Starting document indexing phase');
 
+    // 0. Load configuration
+    const indexerConfig = await loadConfig();
+    await initializeCheckpointInterval();
+    logger.debug('Loaded config', { batchSize: indexerConfig.batch_size, checkpointInterval: indexerConfig.checkpoint_interval });
+
     // 1. Validate and load manifest
     const manifest = await validateAndLoadManifest();
     logger.info(`Manifest loaded: ${manifest.indexable_files.length} files, status: ${manifest.status}`);
 
-    // 2. Handle resume from checkpoint if requested
-    if (options.resume) {
+    // 2. Handle --force flag: clear all data and start fresh
+    if (options.force) {
+      logger.info('Force mode: clearing all indexed data for full re-index');
+      db = await openDatabase();
+      clearAllData(db);
+      await deleteCheckpoint();
+      // Continue with fresh indexing (don't close db, we'll use it)
+    }
+
+    // 3. Handle resume from checkpoint if requested (not with --force)
+    if (options.resume && !options.force) {
       const checkpoint = await loadCheckpoint();
       if (checkpoint && isCheckpointValid(checkpoint, manifest)) {
         logger.info(`Resuming from checkpoint: ${checkpoint.files_indexed}/${checkpoint.files_total} files already indexed`);
@@ -92,20 +110,39 @@ export async function runIndexer(options: IndexerOptions = {}): Promise<void> {
       }
     }
 
-    // 3. Handle incremental indexing
-    if (options.incremental) {
+    // 4. Handle incremental indexing (not with --force)
+    if (options.incremental && !options.force) {
       return runIncrementalIndex(manifest, options);
     }
 
-    // 4. Initialize progress
+    // 5. Initialize progress
     progress = initializeProgress(manifest);
     await saveCheckpoint(progress);
 
-    // 5. Open database
-    db = await openDatabase();
+    // 6. Open database (if not already opened by --force)
+    if (!db) {
+      db = await openDatabase();
+    }
 
-    // 6. Get valid files (exist and accessible)
-    const validFiles = await getValidFiles(manifest);
+    // 7. Get valid files (exist and accessible), filtered by work unit if specified
+    let validFiles = await getValidFiles(manifest);
+
+    // Filter by work unit if specified
+    if (options.workUnit) {
+      const workUnit = manifest.work_units.find(wu => wu.id === options.workUnit);
+      if (!workUnit) {
+        logger.error(`Work unit '${options.workUnit}' not found in manifest`);
+        logger.info(`Available work units: ${manifest.work_units.map(wu => wu.id).join(', ') || 'none'}`);
+        closeDatabase(db);
+        throw new Error(`Work unit '${options.workUnit}' not found`);
+      }
+
+      // Filter files to only those belonging to this work unit's database
+      const originalCount = validFiles.length;
+      validFiles = validFiles.filter(f => f.database === workUnit.database);
+      logger.info(`Filtered to work unit '${options.workUnit}': ${validFiles.length}/${originalCount} files`);
+    }
+
     logger.info(`Found ${validFiles.length} valid files to index`);
 
     if (options.dryRun) {
@@ -117,23 +154,23 @@ export async function runIndexer(options: IndexerOptions = {}): Promise<void> {
       return;
     }
 
-    // 7. Index all files
+    // 8. Index all files
     updatePhase(progress, 'parsing');
     await saveCheckpoint(progress);
 
     const stats = await indexFiles(db, validFiles, manifest, progress, options);
 
-    // 8. Build relationships index
+    // 9. Build relationships index
     updatePhase(progress, 'relationships');
     await saveCheckpoint(progress);
     await buildRelationshipsIndex(db);
 
-    // 9. Optimize database
+    // 10. Optimize database
     updatePhase(progress, 'optimizing');
     await saveCheckpoint(progress);
     await optimizeDatabase(db, manifest);
 
-    // 10. Mark complete
+    // 11. Mark complete
     markCompleted(progress);
     await saveCheckpoint(progress);
 
@@ -175,6 +212,7 @@ async function indexFiles(
 
   // 1. Parse all documents
   updatePhase(progress, 'parsing');
+  const parseStartTime = Date.now();
   const parsedDocs: ParsedDocument[] = [];
 
   for (const file of files) {
@@ -213,11 +251,20 @@ async function indexFiles(
   logger.info(`Total documents including columns: ${allDocs.length}`);
 
   // 3. Extract keywords for all documents (except columns - done during generation)
+  const allKeywords: Array<{ term: string; sourceType: string }> = [];
   for (const doc of allDocs) {
     if (doc.docType !== 'column') {
       doc.keywords = extractKeywordsForDocument(doc);
     }
+    // Collect keywords for the keywords table
+    for (const keyword of doc.keywords) {
+      allKeywords.push({ term: keyword, sourceType: doc.docType });
+    }
   }
+
+  // Record parse timing
+  const parseEndTime = Date.now();
+  updateTimingStats(progress, { parse_time_ms: parseEndTime - parseStartTime });
 
   // 4. Sort documents so tables come before columns (for parent_doc_id linkage)
   const sortedDocs = sortDocumentsForIndexing(allDocs);
@@ -229,6 +276,7 @@ async function indexFiles(
   updatePhase(progress, 'embedding');
   await saveCheckpoint(progress);
 
+  const embeddingStartTime = Date.now();
   let embeddings = new Map<string, number[]>();
 
   if (!options.skipEmbeddings && areEmbeddingsAvailable()) {
@@ -246,14 +294,29 @@ async function indexFiles(
     logger.warn('OPENAI_API_KEY not set - embeddings unavailable');
   }
 
+  // Record embedding timing
+  const embeddingEndTime = Date.now();
+  updateTimingStats(progress, { embedding_time_ms: embeddingEndTime - embeddingStartTime });
+
   // 7. Populate the index
   updatePhase(progress, 'indexing');
   await saveCheckpoint(progress);
 
+  const indexStartTime = Date.now();
   const parentDocIds = new Map<string, number>();
   const stats = populateIndex(db, processedDocs, embeddings, parentDocIds);
 
-  // 8. Update doc type counts
+  // 8. Populate keywords table
+  if (allKeywords.length > 0) {
+    const keywordStats = populateKeywords(db, allKeywords);
+    logger.info(`Keywords indexed: ${keywordStats.inserted} new, ${keywordStats.updated} updated`);
+  }
+
+  // Record index timing
+  const indexEndTime = Date.now();
+  updateTimingStats(progress, { index_time_ms: indexEndTime - indexStartTime });
+
+  // 9. Update doc type counts
   const docCounts = {
     table: processedDocs.filter(d => d.docType === 'table').length,
     column: processedDocs.filter(d => d.docType === 'column').length,
