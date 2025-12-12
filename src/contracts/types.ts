@@ -589,6 +589,9 @@ export interface DatabaseConfig {
 
   /** Human-readable description of this database */
   description?: string;
+
+  /** Whether this database is enabled for processing (default: true) */
+  enabled?: boolean;
 }
 
 /**

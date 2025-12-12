@@ -6,6 +6,7 @@ databases:
       - PUBLIC
     exclude_tables: []
     include_system_tables: false
+    enabled: true
 
   - name: postgres_production
     type: postgres
@@ -13,3 +14,4 @@ databases:
     schemas: []
     exclude_tables: []
     include_system_tables: false
+    enabled: true

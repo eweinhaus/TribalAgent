@@ -55,8 +55,10 @@ let currentProgress: DocumenterProgress | null = null;
  * To clear cache and rebuild, use: npm run document:fresh
  */
 export async function runDocumenter(): Promise<void> {
+  const startTime = Date.now();
   try {
     logger.info('Starting database documentation phase');
+    logger.info(`[Documenter] Started at ${new Date().toLocaleTimeString()}`);
 
     // Set up graceful shutdown handlers
     setupShutdownHandlers();
@@ -127,6 +129,9 @@ export async function runDocumenter(): Promise<void> {
     progress.completed_at = new Date().toISOString();
     await saveDocumenterProgress(progress);
 
+    const duration = Date.now() - startTime;
+    const minutes = Math.floor(duration / 60000);
+    const seconds = Math.floor((duration % 60000) / 1000);
     logger.info('Database documentation phase completed', {
       status: progress.status,
       completedTables: progress.stats.completed_tables,
@@ -134,6 +139,7 @@ export async function runDocumenter(): Promise<void> {
       workUnitsCompleted: Object.values(progress.work_units)
         .filter(wu => wu.status === 'completed').length,
     });
+    logger.info(`[Documenter] Completed in ${minutes}m ${seconds}s`);
 
     // Generate manifest on successful completion
     await generateAndWriteManifest(progress, plan);

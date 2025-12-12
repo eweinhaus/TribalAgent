@@ -25,6 +25,8 @@ export function createPlanCommand(): Command {
     .action(async (options: { force?: boolean; dryRun?: boolean; json?: boolean; config?: string }) => {
       try {
         console.log(chalk.cyan('\nTribal Knowledge - Schema Analyzer\n'));
+        const startTime = Date.now();
+        console.log(chalk.dim(`[Planner] Started at ${new Date().toLocaleTimeString()}`));
 
         const plannerOptions: PlannerOptions = {
           force: options.force,
@@ -33,6 +35,10 @@ export function createPlanCommand(): Command {
         };
 
         const plan = await runPlanner(plannerOptions);
+        const duration = Date.now() - startTime;
+        const minutes = Math.floor(duration / 60000);
+        const seconds = Math.floor((duration % 60000) / 1000);
+        console.log(chalk.dim(`[Planner] Completed in ${minutes}m ${seconds}s`));
 
         if (options.json) {
           console.log(JSON.stringify(plan, null, 2));

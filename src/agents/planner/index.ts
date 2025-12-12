@@ -131,6 +131,12 @@ export async function runPlanner(options: PlannerOptions = {}): Promise<Document
     const relationshipsMap = new Map<string, Relationship[]>();
 
     for (const dbConfig of config.databases) {
+      // Skip disabled databases
+      if (dbConfig.enabled === false) {
+        logger.info(`Skipping disabled database: ${dbConfig.name}`);
+        continue;
+      }
+
       metrics.startTimer('connection');
       const result = await analyzeDatabase(dbConfig.name, dbConfig, plannerConfig);
       metrics.stopTimer('connection');
