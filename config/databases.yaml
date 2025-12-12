@@ -5,9 +5,11 @@ databases:
     schemas:
       - PUBLIC
     exclude_tables: []
+    include_system_tables: false
 
   - name: postgres_production
     type: postgres
     connection_string: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DATABASE}"
     schemas: []
     exclude_tables: []
+    include_system_tables: false
