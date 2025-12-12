@@ -584,6 +584,9 @@ export interface DatabaseConfig {
   /** Override default sample size for this database */
   sample_size?: number;
 
+  /** Include system tables/schemas in analysis (default: false) */
+  include_system_tables?: boolean;
+
   /** Human-readable description of this database */
   description?: string;
 }

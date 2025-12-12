@@ -9,7 +9,7 @@
 export interface DatabaseConnector {
   connect(connectionString: string): Promise<void>;
   disconnect(): Promise<void>;
-  getAllTableMetadata(schemas?: string[], excludeTables?: string[]): Promise<any[]>;
+  getAllTableMetadata(schemas?: string[], excludeTables?: string[], includeSystemTables?: boolean): Promise<any[]>;
   getRelationships(tableMetadata: any[]): Promise<any[]>;
   query(sql: string): Promise<any[]>;
   getTableMetadata(schema: string, table: string): Promise<any>;

@@ -66,7 +66,8 @@ export async function analyzeDatabase(
       logger.debug(`Extracting table metadata from ${dbName}...`);
       const schemas = dbConfig.schemas_include || dbConfig.schemas;
       const excludeTables = dbConfig.tables_exclude || dbConfig.exclude_tables;
-      const tableMetadata = await connector.getAllTableMetadata(schemas, excludeTables);
+      const includeSystemTables = dbConfig.include_system_tables ?? false;
+      const tableMetadata = await connector.getAllTableMetadata(schemas, excludeTables, includeSystemTables);
 
       // Apply max_tables_per_database limit
       const maxTables = plannerConfig.max_tables_per_database || 1000;

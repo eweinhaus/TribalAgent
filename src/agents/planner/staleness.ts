@@ -128,7 +128,8 @@ async function computeCurrentSchemaHash(dbConfig: DatabaseConfig): Promise<Conte
     // Get lightweight table structure
     const schemas = dbConfig.schemas_include || dbConfig.schemas;
     const excludeTables = dbConfig.tables_exclude || dbConfig.exclude_tables;
-    const tables = await connector.getAllTableMetadata(schemas, excludeTables);
+    const includeSystemTables = dbConfig.include_system_tables ?? false;
+    const tables = await connector.getAllTableMetadata(schemas, excludeTables, includeSystemTables);
 
     return computeSchemaHash(tables);
   } finally {
