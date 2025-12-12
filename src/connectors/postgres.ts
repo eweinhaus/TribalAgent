@@ -54,7 +54,7 @@ export class PostgresConnector implements DatabaseConnector {
         schemaFilter = '';
       } else {
         // Default: exclude system schemas and Supabase infrastructure schemas
-        schemaFilter = `AND t.table_schema NOT IN ('pg_catalog', 'information_schema', 'auth', 'storage', 'extensions', 'graphql', 'graphql_public', 'pgsodium', 'pgsodium_masks', 'vault')`;
+        schemaFilter = `AND t.table_schema NOT IN ('pg_catalog', 'information_schema', 'auth', 'storage', 'realtime', 'extensions', 'graphql', 'graphql_public', 'pgsodium', 'pgsodium_masks', 'vault')`;
       }
 
       // Build exclude filter
