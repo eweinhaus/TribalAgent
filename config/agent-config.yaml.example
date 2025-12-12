@@ -9,7 +9,7 @@ planner:
 documenter:
   concurrency: 5
   sample_timeout_ms: 5000
-  llm_model: claude-sonnet-4
+  llm_model: claude-haiku-4.5
   checkpoint_interval: 10
   use_sub_agents: true
 
