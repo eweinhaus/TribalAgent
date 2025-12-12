@@ -58,16 +58,23 @@ export class SnowflakeConnector implements DatabaseConnector {
     });
   }
 
-  async getAllTableMetadata(schemas?: string[], excludeTables?: string[]): Promise<any[]> {
+  async getAllTableMetadata(schemas?: string[], excludeTables?: string[], includeSystemTables?: boolean): Promise<any[]> {
     if (!this.connection) {
       throw new Error('Not connected to database');
     }
 
     try {
       // Build schema filter
-      const schemaFilter = schemas && schemas.length > 0
-        ? `AND TABLE_SCHEMA IN (${schemas.map(s => `'${s}'`).join(', ')})`
-        : '';
+      let schemaFilter: string;
+      if (schemas && schemas.length > 0) {
+        schemaFilter = `AND TABLE_SCHEMA IN (${schemas.map(s => `'${s}'`).join(', ')})`;
+      } else if (includeSystemTables) {
+        // Include all schemas including system schemas
+        schemaFilter = '';
+      } else {
+        // Default: exclude system schemas (INFORMATION_SCHEMA is Snowflake's system schema)
+        schemaFilter = `AND TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA')`;
+      }
 
       // Build exclude filter
       const excludeFilter = excludeTables && excludeTables.length > 0

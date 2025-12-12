@@ -39,16 +39,23 @@ export class PostgresConnector implements DatabaseConnector {
     }
   }
 
-  async getAllTableMetadata(schemas?: string[], excludeTables?: string[]): Promise<any[]> {
+  async getAllTableMetadata(schemas?: string[], excludeTables?: string[], includeSystemTables?: boolean): Promise<any[]> {
     if (!this.client) {
       throw new Error('Not connected to database');
     }
 
     try {
       // Build schema filter
-      const schemaFilter = schemas && schemas.length > 0
-        ? `AND t.table_schema IN (${schemas.map(s => `'${s}'`).join(', ')})`
-        : `AND t.table_schema NOT IN ('pg_catalog', 'information_schema')`;
+      let schemaFilter: string;
+      if (schemas && schemas.length > 0) {
+        schemaFilter = `AND t.table_schema IN (${schemas.map(s => `'${s}'`).join(', ')})`;
+      } else if (includeSystemTables) {
+        // Include all schemas including system schemas
+        schemaFilter = '';
+      } else {
+        // Default: exclude system schemas
+        schemaFilter = `AND t.table_schema NOT IN ('pg_catalog', 'information_schema')`;
+      }
 
       // Build exclude filter
       const excludeFilter = excludeTables && excludeTables.length > 0
