@@ -267,7 +267,7 @@ export class TableDocumenter {
     const database = this.workUnit.database;
 
     // Batch size for parallel processing (avoid overwhelming LLM API)
-    const BATCH_SIZE = 8;
+    const BATCH_SIZE = 10;
 
     // Import ColumnInferencer once
     const { ColumnInferencer } = await import('./ColumnInferencer.js');

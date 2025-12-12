@@ -22,7 +22,6 @@ export function displayPlanSummary(plan: DocumentationPlan): void {
   console.log(`  Tables:        ${plan.summary.total_tables}`);
   console.log(`  Work Units:    ${plan.summary.total_work_units}`);
   console.log(`  Domains:       ${plan.summary.domain_count}`);
-  console.log(`  Est. Time:     ${plan.summary.total_estimated_minutes} minutes`);
   console.log(`  Parallelism:   ${plan.summary.recommended_parallelism} workers`);
   console.log(`  Complexity:    ${formatComplexity(plan.complexity)}`);
 
@@ -135,5 +134,4 @@ export function displayPlanCompact(plan: DocumentationPlan): void {
   console.log(`Work Units: ${plan.summary.total_work_units}`);
   console.log(`Domains: ${plan.summary.domain_count}`);
   console.log(`Complexity: ${plan.complexity}`);
-  console.log(`Est. Time: ${plan.summary.total_estimated_minutes}m`);
 }

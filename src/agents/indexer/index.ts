@@ -77,9 +77,11 @@ export * from './types.js';
 export async function runIndexer(options: IndexerOptions = {}): Promise<void> {
   let db = null;
   let progress: IndexerProgress | null = null;
+  const startTime = Date.now();
 
   try {
     logger.info('Starting document indexing phase');
+    logger.info(`[Indexer] Started at ${new Date().toLocaleTimeString()}`);
 
     // 0. Load configuration
     const indexerConfig = await loadConfig();
@@ -174,7 +176,11 @@ export async function runIndexer(options: IndexerOptions = {}): Promise<void> {
     markCompleted(progress);
     await saveCheckpoint(progress);
 
+    const duration = Date.now() - startTime;
+    const minutes = Math.floor(duration / 60000);
+    const seconds = Math.floor((duration % 60000) / 1000);
     logger.info(`Indexing completed: ${stats.inserted} inserted, ${stats.updated} updated, ${stats.failed} failed`);
+    logger.info(`[Indexer] Completed in ${minutes}m ${seconds}s`);
     logger.info(getProgressSummary(progress));
 
   } catch (error) {

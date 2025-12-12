@@ -4,13 +4,19 @@
  * Handles connections and metadata extraction from Snowflake databases.
  */
 
+/**
+ * Snowflake Database Connector
+ *
+ * Handles connections and metadata extraction from Snowflake databases.
+ */
+
 import { logger } from '../utils/logger.js';
 import { DatabaseConnector } from './index.js';
 import snowflake from 'snowflake-sdk';
 
-// Configure Snowflake SDK to reduce verbosity (suppress INFO logs)
-// Valid levels: ERROR, WARN, INFO, DEBUG, TRACE
-snowflake.configure({ logLevel: 'WARN' });
+// Configure Snowflake SDK to suppress most logs
+// Note: One "Configuring logger" INFO message still appears during SDK init - this is unavoidable
+snowflake.configure({ logLevel: 'ERROR' });
 
 export class SnowflakeConnector implements DatabaseConnector {
   private connection: snowflake.Connection | null = null;

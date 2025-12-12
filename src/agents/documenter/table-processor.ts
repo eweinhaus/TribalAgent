@@ -138,7 +138,7 @@ export async function processTablesInWorkUnit(
   
   // Batch size for parallel processing
   // Balance between speed and database/LLM load
-  const BATCH_SIZE = 5;
+  const BATCH_SIZE = 10;
 
   // Process tables in parallel batches
   for (let i = 0; i < sortedTables.length; i += BATCH_SIZE) {
