@@ -18,6 +18,12 @@
     "index:migrate-vec0": "tsx scripts/migrate-vec-to-vec0.ts",
     "pipeline": "npm run plan && npm run document && npm run index",
     "pipeline:fresh": "npm run document:clean && npm run index:clean && npm run pipeline",
+    "pipeline:deploy": "npm run pipeline && npm run sync",
+    "sync": "tsx src/cli/sync.ts",
+    "sync:index": "tsx src/cli/sync.ts --index-only",
+    "sync:docs": "tsx src/cli/sync.ts --docs-only",
+    "sync:no-backup": "tsx src/cli/sync.ts --no-backup",
+    "sync:dry-run": "tsx src/cli/sync.ts --dry-run",
     "status": "tsx src/utils/status.ts",
     "validate-prompts": "tsx src/utils/validate-prompts.ts",
     "test": "vitest",
@@ -46,6 +52,7 @@
     "pg": "^8.11.0",
     "snowflake-sdk": "^1.12.0",
     "sqlite-vec": "^0.1.7-alpha.2",
+    "ssh2-sftp-client": "^12.0.1",
     "zod": "^3.22.0"
   },
   "devDependencies": {
@@ -53,6 +60,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.11.0",
     "@types/pg": "^8.10.0",
+    "@types/ssh2-sftp-client": "^9.0.6",
     "dotenv": "^17.2.3",
     "tsx": "^4.7.0",
     "typescript": "^5.3.0",

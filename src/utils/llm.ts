@@ -1,14 +1,49 @@
 /**
  * LLM Integration Utilities
  *
- * Handles calls to external LLM APIs via OpenRouter (for Claude) and OpenAI (for embeddings).
- * Includes retry logic, rate limiting, and error handling.
+ * Handles calls to external LLM APIs via OpenRouter (for Claude) and OpenAI (for embeddings + fallback).
+ * Includes retry logic, rate limiting, error handling, and automatic fallback to GPT-4o.
+ * 
+ * Fallback Behavior:
+ * - Primary: OpenRouter (Claude models) using OPENROUTER_API_KEY
+ * - Fallback: OpenAI (GPT-4o) using existing OPENAI_API_KEY (same as embeddings)
+ * - Controlled via LLM_FALLBACK_ENABLED env var (default: true)
+ * - Fallback model configurable via LLM_FALLBACK_MODEL (default: gpt-4o)
  */
 
 import OpenAI from 'openai';
 import { logger } from './logger.js';
 import type { AgentError } from '../agents/documenter/types.js';
 import { createAgentError, ErrorCodes } from '../agents/documenter/errors.js';
+
+// =============================================================================
+// Fallback Configuration
+// =============================================================================
+
+/**
+ * Check if LLM fallback is enabled
+ * Default: true (enabled)
+ */
+function isFallbackEnabled(): boolean {
+  const envValue = process.env.LLM_FALLBACK_ENABLED;
+  // Default to true if not set, only disable if explicitly set to 'false'
+  return envValue !== 'false';
+}
+
+/**
+ * Get the fallback model to use when primary fails
+ * Default: gpt-4o
+ */
+function getFallbackModel(): string {
+  return process.env.LLM_FALLBACK_MODEL || 'gpt-4o';
+}
+
+/**
+ * Check if fallback is available (OpenAI API key is set)
+ */
+function isFallbackAvailable(): boolean {
+  return !!process.env.OPENAI_API_KEY;
+}
 
 // Initialize OpenRouter client (for LLM completions - Claude models)
 function getOpenRouterClient(): OpenAI {
@@ -250,6 +285,10 @@ export interface TokenUsage {
 export interface LLMResponse {
   content: string;
   tokens: TokenUsage;
+  /** Whether the response came from the fallback provider */
+  usedFallback?: boolean;
+  /** The actual model used (may differ from requested if fallback was used) */
+  actualModel?: string;
 }
 
 /**
@@ -576,7 +615,13 @@ export async function generateEmbeddings(
 }
 
 /**
- * Main LLM calling function with retry logic
+ * Main LLM calling function with retry logic and automatic fallback
+ * 
+ * Fallback Behavior:
+ * - If primary provider (OpenRouter/Claude) fails after all retries
+ * - And LLM_FALLBACK_ENABLED is not 'false'
+ * - And OPENAI_API_KEY is available
+ * - Then automatically falls back to GPT-4o
  */
 export async function callLLM(
   prompt: string,
@@ -586,6 +631,8 @@ export async function callLLM(
     retryDelay?: number;
     timeout?: number;
     maxTokens?: number;
+    /** Disable fallback for this specific call */
+    disableFallback?: boolean;
   } = {}
 ): Promise<LLMResponse> {
   const {
@@ -593,10 +640,14 @@ export async function callLLM(
     retryDelay = 1000,
     timeout: _timeout = 30000,
     maxTokens = 4096,
+    disableFallback = false,
   } = options;
 
   let lastError: AgentError | null = null;
   const retryHistory: Array<{ attempt: number; error: AgentError; delay?: number }> = [];
+
+  // Determine if this is a Claude model (potential for fallback)
+  const isClaudeModel = model.startsWith('claude-') || model.startsWith('anthropic/');
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -604,7 +655,7 @@ export async function callLLM(
 
       let response: LLMResponse;
 
-      if (model.startsWith('claude-') || model.startsWith('anthropic/')) {
+      if (isClaudeModel) {
         // Use OpenRouter for Claude models
         response = await callClaude(prompt, model, maxTokens);
       } else if (model.startsWith('gpt-')) {
@@ -615,7 +666,11 @@ export async function callLLM(
       }
 
       logger.debug(`LLM call successful, response length: ${response.content.length}`);
-      return response;
+      return {
+        ...response,
+        usedFallback: false,
+        actualModel: model,
+      };
     } catch (error) {
       // Classify the error
       const classifiedError = classifyLLMError(error, model, attempt);
@@ -665,20 +720,95 @@ export async function callLLM(
           error: classifiedError,
         });
 
-        // For parse failures, throw immediately (no retry)
+        // For parse failures, throw immediately (no retry, no fallback)
         if (classifiedError.code === ErrorCodes.DOC_LLM_PARSE_FAILED) {
           throw classifiedError;
         }
 
-        // For other non-recoverable errors, throw immediately
+        // For other non-recoverable errors, throw immediately (but may fallback below)
         if (!classifiedError.recoverable) {
-          throw classifiedError;
+          break; // Exit retry loop, try fallback
         }
       }
     }
   }
 
-  // All retries failed - create final error with retry history
+  // ==========================================================================
+  // Primary provider failed - attempt fallback to GPT-4o
+  // ==========================================================================
+  
+  const shouldTryFallback = 
+    isClaudeModel &&                    // Only fallback from Claude models
+    !disableFallback &&                  // Fallback not disabled for this call
+    isFallbackEnabled() &&               // LLM_FALLBACK_ENABLED !== 'false'
+    isFallbackAvailable();               // OPENAI_API_KEY is set
+
+  if (shouldTryFallback) {
+    const fallbackModel = getFallbackModel();
+    
+    logger.warn(
+      `Primary LLM (${model}) failed after ${maxRetries} attempts. ` +
+      `Falling back to ${fallbackModel}...`,
+      {
+        primaryModel: model,
+        fallbackModel,
+        lastError: lastError?.message,
+      }
+    );
+
+    try {
+      // Call OpenAI directly with the fallback model
+      const fallbackResponse = await callOpenAI(prompt, fallbackModel, maxTokens);
+      
+      logger.info(
+        `Fallback to ${fallbackModel} succeeded! ` +
+        `Response length: ${fallbackResponse.content.length} chars`,
+        { 
+          fallbackModel,
+          primaryModel: model,
+          tokens: fallbackResponse.tokens.total,
+        }
+      );
+
+      return {
+        ...fallbackResponse,
+        usedFallback: true,
+        actualModel: fallbackModel,
+      };
+    } catch (fallbackError) {
+      // Fallback also failed - throw combined error
+      const fallbackErrorMsg = fallbackError instanceof Error 
+        ? fallbackError.message 
+        : String(fallbackError);
+
+      logger.error(
+        `Both primary (${model}) and fallback (${fallbackModel}) failed`,
+        {
+          primaryError: lastError?.message,
+          fallbackError: fallbackErrorMsg,
+        }
+      );
+
+      const combinedError = createLLMError(
+        ErrorCodes.DOC_LLM_FAILED,
+        `Both primary (${model}) and fallback (${fallbackModel}) failed. ` +
+        `Primary: ${lastError?.message ?? 'Unknown'}. Fallback: ${fallbackErrorMsg}`,
+        false,
+        {
+          model,
+          fallbackModel,
+          attempts: maxRetries,
+          retryHistory,
+          primaryError: lastError?.context,
+          fallbackError: fallbackErrorMsg,
+        }
+      );
+
+      throw combinedError;
+    }
+  }
+
+  // No fallback available/enabled - throw the original error
   const finalError = createLLMError(
     lastError?.code ?? ErrorCodes.DOC_LLM_FAILED,
     `LLM call failed after ${maxRetries} attempts: ${lastError?.message ?? 'Unknown error'}`,
@@ -688,10 +818,12 @@ export async function callLLM(
       attempts: maxRetries,
       retryHistory,
       finalError: lastError?.context,
+      fallbackAvailable: isFallbackAvailable(),
+      fallbackEnabled: isFallbackEnabled(),
     }
   );
 
-  logger.error('All LLM call attempts failed', finalError);
+  logger.error('All LLM call attempts failed (no fallback)', finalError);
   throw finalError;
 }
 
@@ -704,13 +836,15 @@ export function estimateTokens(text: string): number {
 }
 
 /**
- * Validate LLM API keys on startup
+ * Validate LLM API keys on startup and log fallback configuration
  */
 export async function validateLLMKeys(): Promise<void> {
   logger.info('Validating LLM API keys...');
 
   const openRouterKey = process.env.OPENROUTER_API_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
+  const fallbackEnabled = isFallbackEnabled();
+  const fallbackModel = getFallbackModel();
 
   if (!openRouterKey) {
     logger.warn('OPENROUTER_API_KEY not set - Claude integration will not work');
@@ -719,9 +853,16 @@ export async function validateLLMKeys(): Promise<void> {
   }
 
   if (!openaiKey) {
-    logger.warn('OPENAI_API_KEY not set - Embeddings will not work');
+    logger.warn('OPENAI_API_KEY not set - Embeddings and fallback will not work');
   } else {
     logger.info('OpenAI API key found (for embeddings)');
+    
+    // Log fallback configuration
+    if (fallbackEnabled) {
+      logger.info(`LLM fallback ENABLED: Will use ${fallbackModel} if Claude fails`);
+    } else {
+      logger.info('LLM fallback DISABLED (LLM_FALLBACK_ENABLED=false)');
+    }
   }
 
   if (!openRouterKey && !openaiKey) {
@@ -729,5 +870,29 @@ export async function validateLLMKeys(): Promise<void> {
       'At least one LLM API key must be configured (OPENROUTER_API_KEY or OPENAI_API_KEY)'
     );
   }
+
+  // Warn if OpenRouter is not configured but fallback is available
+  if (!openRouterKey && openaiKey && fallbackEnabled) {
+    logger.info(
+      `Note: OpenRouter not configured, but OpenAI is. ` +
+      `Consider using GPT models directly or configure OPENROUTER_API_KEY for Claude.`
+    );
+  }
+}
+
+/**
+ * Get current fallback configuration status
+ * Useful for debugging and status reporting
+ */
+export function getFallbackStatus(): {
+  enabled: boolean;
+  available: boolean;
+  model: string;
+} {
+  return {
+    enabled: isFallbackEnabled(),
+    available: isFallbackAvailable(),
+    model: getFallbackModel(),
+  };
 }
 
