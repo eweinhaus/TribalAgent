@@ -105,10 +105,10 @@ export class SFTPSyncService {
   private client: Client;
   private remotePaths: { indexPath: string; mapPath: string };
 
-  constructor(config?: SFTPConfig) {
+  constructor(config?: SFTPConfig, remotePaths?: { indexPath: string; mapPath: string }) {
     this.config = config || getSFTPConfigFromEnv();
     this.client = new Client();
-    this.remotePaths = getRemotePaths();
+    this.remotePaths = remotePaths || getRemotePaths();
   }
 
   /**

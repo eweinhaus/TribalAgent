@@ -1,5 +1,5 @@
 databases:
-  # Snowflake - DABSTEP_DB (disabled)
+  # Snowflake - DABSTEP_DB (enabled)
   - name: snowflake_production
     type: snowflake
     connection_config: '{"account":"${SNOWFLAKE_ACCOUNT}","username":"${SNOWFLAKE_USERNAME}","password":"${SNOWFLAKE_PASSWORD}","warehouse":"${SNOWFLAKE_WAREHOUSE}","database":"${SNOWFLAKE_DATABASE}","region":"${SNOWFLAKE_REGION}"}'
@@ -7,9 +7,9 @@ databases:
       - PUBLIC
     exclude_tables: []
     include_system_tables: false
-    enabled: false
+    enabled: true
 
-  # Snowflake - SYNTHETIC_250 (enabled)
+  # Snowflake - SYNTHETIC_250 (disabled)
   - name: synthetic_250_snowflake
     type: snowflake
     connection_config: '{"account":"${SNOWFLAKE_SYNTHETIC_ACCOUNT}","username":"${SNOWFLAKE_SYNTHETIC_USERNAME}","password":"${SNOWFLAKE_SYNTHETIC_PASSWORD}","warehouse":"${SNOWFLAKE_SYNTHETIC_WAREHOUSE}","database":"${SNOWFLAKE_SYNTHETIC_DATABASE}","region":"${SNOWFLAKE_SYNTHETIC_REGION}"}'
@@ -17,18 +17,18 @@ databases:
       - SYNTHETIC
     exclude_tables: []
     include_system_tables: false
-    enabled: true
+    enabled: false
 
-  # PostgreSQL - Supabase (disabled)
+  # PostgreSQL - Supabase (enabled)
   - name: postgres_production
     type: postgres
     connection_string: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DATABASE}"
     schemas: []
     exclude_tables: []
     include_system_tables: false
-    enabled: false
+    enabled: true
 
-  # PostgreSQL - Supabase SYNTHETIC_250 (enabled)
+  # PostgreSQL - Supabase SYNTHETIC_250 (disabled)
   - name: synthetic_250_postgres
     type: postgres
     connection_string: "postgresql://${SUPABASE_SYNTHETIC_USER}:${SUPABASE_SYNTHETIC_PASSWORD}@${SUPABASE_SYNTHETIC_HOST}:${SUPABASE_SYNTHETIC_PORT}/${SUPABASE_SYNTHETIC_DATABASE}"
@@ -36,4 +36,4 @@ databases:
       - synthetic
     exclude_tables: []
     include_system_tables: false
-    enabled: true
+    enabled: false
