@@ -15,7 +15,7 @@
 
 import { logger } from '../../../utils/logger.js';
 import { loadPromptTemplate, interpolateTemplate, mapColumnVariables } from '../../../utils/prompts.js';
-import { callLLM } from '../../../utils/llm.js';
+import { callLLM, getConfiguredModel } from '../../../utils/llm.js';
 import { generateColumnFallbackDescription } from '../utils/fallback-descriptions.js';
 import { ErrorCodes } from '../errors.js';
 import type { AgentError } from '../types.js';
@@ -98,15 +98,16 @@ export class ColumnInferencer {
       // Interpolate template
       const prompt = interpolateTemplate(template, variables);
 
-      // Call LLM for inference
-      const { content, tokens } = await callLLM(prompt, 'claude-sonnet-4');
+      // Call LLM for inference using configured model
+      const model = await getConfiguredModel();
+      const { content, tokens } = await callLLM(prompt, model);
 
       // Validate and clean response
       const description = this.validateDescription(content.trim());
 
       const duration = Date.now() - startTime;
       logger.debug(
-        `Generated description for ${this.columnMetadata.name} (${tokens.total} tokens, ${duration}ms): ${description.substring(0, 50)}...`
+        `Generated description for ${this.columnMetadata.name} (${tokens.total} tokens, ${duration}ms, model: ${model}): ${description.substring(0, 50)}...`
       );
 
       // Store tokens for tracking (will be handled by parent agent)
