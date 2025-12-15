@@ -22,6 +22,7 @@ import { loadPromptTemplate, interpolateTemplate, mapTableVariables } from '../.
 import { callLLM, getConfiguredModel } from '../../../utils/llm.js';
 import { generateTableFallbackDescription } from '../utils/fallback-descriptions.js';
 import { createAgentError, ErrorCodes } from '../errors.js';
+import { enrichTableSemantics, type SemanticMetadata } from './SemanticEnricher.js';
 import type { AgentError, WorkUnit, TableSpec } from '../types.js';
 
 /**
@@ -96,6 +97,13 @@ export class TableDocumenter {
       const tableDescription = tableDescriptionResult.description;
       // TODO: Track tokens and timing in progress system (Phase 7)
 
+      // Generate semantic metadata
+      const semanticMetadata = await this.generateSemanticMetadata(
+        tableDescription,
+        tableMetadata,
+        columnDescriptions
+      );
+
       // Generate documentation files
       // Error isolation: Markdown failure should not prevent JSON write
       let markdownPath: string | null = null;
@@ -106,7 +114,8 @@ export class TableDocumenter {
           tableDescription,
           columnDescriptions,
           tableMetadata,
-          sampleData
+          sampleData,
+          semanticMetadata
         );
       } catch (error) {
         logger.error(`Markdown generation failed for ${fullyQualifiedName}, continuing with JSON`, {
@@ -120,7 +129,8 @@ export class TableDocumenter {
           tableDescription,
           columnDescriptions,
           tableMetadata,
-          sampleData
+          sampleData,
+          semanticMetadata
         );
       } catch (error) {
         logger.error(`JSON generation failed for ${fullyQualifiedName}`, {
@@ -418,6 +428,38 @@ export class TableDocumenter {
   }
 
   /**
+   * Generate semantic metadata for the table
+   */
+  private async generateSemanticMetadata(
+    tableDescription: string,
+    tableMetadata: any,
+    columnDescriptions: Record<string, string>
+  ): Promise<SemanticMetadata> {
+    try {
+      return await enrichTableSemantics({
+        tableName: this.tableSpec.table_name,
+        schema: this.tableSpec.schema_name,
+        description: tableDescription,
+        columns: (tableMetadata.columns || []).map((col: any) => ({
+          name: col.column_name || col.name,
+          type: col.data_type,
+          description: columnDescriptions[col.column_name || col.name],
+        })),
+        primaryKey: tableMetadata.primary_key || [],
+        foreignKeys: tableMetadata.foreign_keys || [],
+        rowCount: this.tableSpec.row_count_approx,
+      });
+    } catch (error) {
+      logger.warn(`Semantic enrichment failed for ${this.tableSpec.table_name}`, error);
+      return {
+        semantic_roles: [],
+        typical_joins: [],
+        analysis_patterns: [],
+      };
+    }
+  }
+
+  /**
    * Generate Markdown documentation file
    * Returns file path for summary
    */
@@ -425,9 +467,10 @@ export class TableDocumenter {
     tableDescription: string,
     columnDescriptions: Record<string, string>,
     tableMetadata: any,
-    sampleData: any[]
+    sampleData: any[],
+    semanticMetadata: SemanticMetadata
   ): Promise<string> {
-    const content = this.buildMarkdownContent(tableDescription, columnDescriptions, tableMetadata, sampleData);
+    const content = this.buildMarkdownContent(tableDescription, columnDescriptions, tableMetadata, sampleData, semanticMetadata);
     const filePath = this.getMarkdownFilePath();
 
     try {
@@ -470,7 +513,8 @@ export class TableDocumenter {
     tableDescription: string,
     columnDescriptions: Record<string, string>,
     tableMetadata: any,
-    sampleData: any[]
+    sampleData: any[],
+    semanticMetadata: SemanticMetadata
   ): Promise<string> {
     const schema = this.tableSpec.schema_name;
     const table = this.tableSpec.table_name;
@@ -491,6 +535,10 @@ export class TableDocumenter {
       primary_key: tableMetadata.primary_key,
       foreign_keys: tableMetadata.foreign_keys,
       indexes: tableMetadata.indexes,
+      // Semantic metadata for AI-assisted querying
+      semantic_roles: semanticMetadata.semantic_roles,
+      typical_joins: semanticMetadata.typical_joins,
+      analysis_patterns: semanticMetadata.analysis_patterns,
       sample_data: sampleData.slice(0, 5), // Include up to 5 sample rows
       generated_at: new Date().toISOString(),
     };
@@ -547,7 +595,8 @@ export class TableDocumenter {
     tableDescription: string,
     columnDescriptions: Record<string, string>,
     tableMetadata: any,
-    sampleData: any[]
+    sampleData: any[],
+    semanticMetadata: SemanticMetadata
   ): string {
     const schema = this.tableSpec.schema_name;
     const table = this.tableSpec.table_name;
@@ -562,6 +611,12 @@ export class TableDocumenter {
 
     if (this.tableSpec.row_count_approx) {
       lines.push(`**Row Count:** ${this.tableSpec.row_count_approx.toLocaleString()}`);
+      lines.push('');
+    }
+
+    // Semantic roles section
+    if (semanticMetadata.semantic_roles.length > 0) {
+      lines.push(`**Semantic Roles:** ${semanticMetadata.semantic_roles.join(', ')}`);
       lines.push('');
     }
 
@@ -602,6 +657,31 @@ export class TableDocumenter {
       lines.push('');
       for (const idx of tableMetadata.indexes) {
         lines.push(`- \`${idx.index_name || idx.name}\`: ${idx.index_definition || ''}`);
+      }
+      lines.push('');
+    }
+
+    // Typical joins section
+    if (semanticMetadata.typical_joins.length > 0) {
+      lines.push('## Typical Joins');
+      lines.push('');
+      lines.push('| To Table | Relationship | Join Column | Cardinality | Frequency |');
+      lines.push('|----------|--------------|-------------|-------------|-----------|');
+      for (const join of semanticMetadata.typical_joins) {
+        lines.push(`| ${join.toTable} | ${join.relationship} | ${join.joinColumn} | ${join.cardinality} | ${join.frequency} |`);
+      }
+      lines.push('');
+    }
+
+    // Analysis patterns section
+    if (semanticMetadata.analysis_patterns.length > 0) {
+      lines.push('## Analysis Patterns');
+      lines.push('');
+      for (const pattern of semanticMetadata.analysis_patterns) {
+        lines.push(`- **${pattern.name}**: ${pattern.description}`);
+        if (pattern.requiredJoins && pattern.requiredJoins.length > 0) {
+          lines.push(`  - Required joins: ${pattern.requiredJoins.join(', ')}`);
+        }
       }
       lines.push('');
     }
