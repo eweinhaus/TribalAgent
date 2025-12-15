@@ -28,11 +28,12 @@ const AgentConfigSchema = z.object({
   planner: z.object({
     enabled: z.boolean().default(true),
     domain_inference: z.boolean().default(true),
+    llm_model: z.string().default('claude-haiku-4.5'),
   }).default({}),
   documenter: z.object({
     concurrency: z.number().min(1).max(10).default(5),
     sample_timeout_ms: z.number().positive().default(5000),
-    llm_model: z.string().default('claude-sonnet-4'),
+    llm_model: z.string().default('claude-haiku-4.5'),
     checkpoint_interval: z.number().positive().default(10),
     use_sub_agents: z.boolean().default(true),
   }).default({}),

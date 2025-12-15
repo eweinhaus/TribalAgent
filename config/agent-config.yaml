@@ -2,6 +2,7 @@ planner:
   enabled: true
   domain_inference: true
   max_tables_per_database: 1000
+  llm_model: claude-haiku-4.5
 
 documenter:
   concurrency: 5

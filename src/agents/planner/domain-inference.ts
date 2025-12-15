@@ -100,8 +100,9 @@ async function inferDomainsWithLLM(
     // Load and populate the prompt template
     const prompt = await buildDomainInferencePrompt(database, tables, relationships);
 
-    // Call LLM
-    const model = config.llm_model || 'claude-sonnet-4';
+    // Call LLM - env var takes priority, then config, then default
+    // LLM_PRIMARY_MODEL env var allows quick switching without config changes
+    const model = process.env.LLM_PRIMARY_MODEL || config.llm_model || 'claude-haiku-4.5';
     logger.info(`Calling LLM for domain inference (${tables.length} tables)`, { model });
 
     const response = await callLLM(prompt, model, {

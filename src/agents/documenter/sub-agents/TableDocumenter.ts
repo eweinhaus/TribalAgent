@@ -19,7 +19,7 @@ import path from 'path';
 import { logger } from '../../../utils/logger.js';
 import type { DatabaseConnector } from '../../../connectors/index.js';
 import { loadPromptTemplate, interpolateTemplate, mapTableVariables } from '../../../utils/prompts.js';
-import { callLLM } from '../../../utils/llm.js';
+import { callLLM, getConfiguredModel } from '../../../utils/llm.js';
 import { generateTableFallbackDescription } from '../utils/fallback-descriptions.js';
 import { createAgentError, ErrorCodes } from '../errors.js';
 import type { AgentError, WorkUnit, TableSpec } from '../types.js';
@@ -364,11 +364,12 @@ export class TableDocumenter {
       );
 
       const prompt = interpolateTemplate(template, variables);
-      const { content, tokens } = await callLLM(prompt, 'claude-sonnet-4');
+      const model = await getConfiguredModel();
+      const { content, tokens } = await callLLM(prompt, model);
 
       const duration = Date.now() - startTime;
       logger.debug(
-        `Generated table description for ${fullyQualifiedName} (${tokens.total} tokens, ${duration}ms)`
+        `Generated table description for ${fullyQualifiedName} (${tokens.total} tokens, ${duration}ms, model: ${model})`
       );
 
       return {

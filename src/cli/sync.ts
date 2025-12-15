@@ -10,6 +10,8 @@
  *   npm run sync:docs         # Sync docs only
  *   npm run sync:no-backup    # Sync without backup
  *   npm run sync:dry-run      # Show what would be done without uploading
+ *   npm run sync -- --target synth    # Sync to /synth/ folder
+ *   npm run sync -- --target dabstep  # Sync to /dabstep/ folder
  *
  * Environment Variables:
  *   SFTP_HOST                  - SFTP server hostname (required)
@@ -17,16 +19,66 @@
  *   SFTP_USER                  - SFTP username (required)
  *   SFTP_PASSWORD              - SFTP password (or use SFTP_PRIVATE_KEY_PATH)
  *   SFTP_PRIVATE_KEY_PATH      - Path to SSH private key
- *   SFTP_REMOTE_INDEX_PATH     - Remote path for index (default: /data/index)
- *   SFTP_REMOTE_MAP_PATH       - Remote path for docs (default: /data/map)
+ *   SFTP_TARGET                - Target folder: 'synth' or 'dabstep' (default: auto-detect)
  *   TRIBAL_DB_PATH             - Local database path (default: ./data/tribal-knowledge.db)
  *   TRIBAL_DOCS_PATH           - Local docs path (default: ./docs)
  */
 
 import { Command } from 'commander';
 import * as path from 'path';
-import { SFTPSyncService, getSFTPConfigFromEnv, getRemotePaths } from '../utils/sftp-sync.js';
+import * as fs from 'fs/promises';
+import * as yaml from 'js-yaml';
+import { SFTPSyncService, getSFTPConfigFromEnv } from '../utils/sftp-sync.js';
 import { logger } from '../utils/logger.js';
+
+/**
+ * Detect which dataset group is enabled based on databases.yaml
+ * Returns 'synth' if synthetic databases are enabled, 'dabstep' if dabstep databases are enabled
+ */
+async function detectTargetFromConfig(): Promise<'synth' | 'dabstep' | null> {
+  try {
+    const configPath = path.join(process.cwd(), 'config', 'databases.yaml');
+    const content = await fs.readFile(configPath, 'utf-8');
+    const config = yaml.load(content) as { databases: Array<{ name: string; enabled: boolean }> };
+
+    const enabledDatabases = config.databases
+      .filter(db => db.enabled)
+      .map(db => db.name);
+
+    // Check for synthetic databases
+    const hasSynthetic = enabledDatabases.some(name => 
+      name.includes('synthetic') || name.includes('synth')
+    );
+
+    // Check for dabstep/production databases  
+    const hasDabstep = enabledDatabases.some(name => 
+      name.includes('production') || name.includes('dabstep')
+    );
+
+    if (hasSynthetic && !hasDabstep) return 'synth';
+    if (hasDabstep && !hasSynthetic) return 'dabstep';
+    if (hasSynthetic && hasDabstep) {
+      console.log('⚠️  Both synthetic and dabstep databases are enabled. Use --target to specify.');
+      return null;
+    }
+
+    return null;
+  } catch (error) {
+    console.log('⚠️  Could not read databases.yaml for auto-detection');
+    return null;
+  }
+}
+
+/**
+ * Get remote paths based on target folder
+ */
+function getRemotePathsForTarget(target: string): { indexPath: string; mapPath: string } {
+  // Target folder structure: /data/{target}/index and /data/{target}/map
+  return {
+    indexPath: `/data/${target}/index`,
+    mapPath: `/data/${target}/map`,
+  };
+}
 
 // Load environment variables
 import 'dotenv/config';
@@ -46,18 +98,45 @@ program
   .option('--max-backups <number>', 'Maximum number of backups to retain', '5')
   .option('--db-path <path>', 'Local database path')
   .option('--docs-path <path>', 'Local docs path')
+  .option('--target <folder>', 'Target folder: synth or dabstep (default: auto-detect from databases.yaml)')
   .action(async (options) => {
     console.log('\n🚀 Tribal Knowledge SFTP Sync\n');
 
+    // Determine target folder
+    let target = options.target || process.env.SFTP_TARGET;
+    
+    if (!target) {
+      console.log('🔍 Auto-detecting target from databases.yaml...');
+      target = await detectTargetFromConfig();
+      
+      if (!target) {
+        console.error('❌ Could not auto-detect target folder.');
+        console.error('   Use --target synth or --target dabstep');
+        console.error('   Or set SFTP_TARGET environment variable');
+        process.exit(1);
+      }
+      console.log(`   Detected: ${target}\n`);
+    }
+
+    // Validate target
+    if (!['synth', 'dabstep'].includes(target)) {
+      console.error(`❌ Invalid target: ${target}`);
+      console.error('   Valid targets: synth, dabstep');
+      process.exit(1);
+    }
+
+    const remotePaths = getRemotePathsForTarget(target);
+
     // Validate environment
+    let config;
     try {
-      const config = getSFTPConfigFromEnv();
-      const remotePaths = getRemotePaths();
+      config = getSFTPConfigFromEnv();
 
       console.log('📡 SFTP Configuration:');
       console.log(`   Host: ${config.host}:${config.port}`);
       console.log(`   User: ${config.username}`);
       console.log(`   Auth: ${config.password ? 'Password' : 'SSH Key'}`);
+      console.log(`   Target: ${target}`);
       console.log(`   Remote Index: ${remotePaths.indexPath}`);
       console.log(`   Remote Map: ${remotePaths.mapPath}`);
       console.log('');
@@ -105,7 +184,7 @@ program
     console.log('📤 Starting sync...\n');
 
     try {
-      const service = new SFTPSyncService();
+      const service = new SFTPSyncService(config, remotePaths);
       const result = await service.syncAll(localDbPath, localDocsPath, syncOptions);
 
       // Print results

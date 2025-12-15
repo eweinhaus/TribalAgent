@@ -1,12 +1,17 @@
 /**
  * LLM Integration Utilities
  *
- * Handles calls to external LLM APIs via OpenRouter (for Claude) and OpenAI (for embeddings + fallback).
+ * Handles calls to external LLM APIs via OpenRouter (for Claude) and OpenAI (for GPT models).
  * Includes retry logic, rate limiting, error handling, and automatic fallback to GPT-4o.
  * 
+ * Model Selection:
+ * - LLM_PRIMARY_MODEL env var: Override primary model (default: claude-haiku-4.5)
+ * - Claude models use OpenRouter (OPENROUTER_API_KEY)
+ * - GPT models use OpenAI directly (OPENAI_API_KEY)
+ * 
  * Fallback Behavior:
- * - Primary: OpenRouter (Claude models) using OPENROUTER_API_KEY
- * - Fallback: OpenAI (GPT-4o) using existing OPENAI_API_KEY (same as embeddings)
+ * - 402 (insufficient credits) errors: Immediate fallback to GPT-4o (no retry)
+ * - Other errors: Retry once, then fallback to GPT-4o
  * - Controlled via LLM_FALLBACK_ENABLED env var (default: true)
  * - Fallback model configurable via LLM_FALLBACK_MODEL (default: gpt-4o)
  */
@@ -15,6 +20,30 @@ import OpenAI from 'openai';
 import { logger } from './logger.js';
 import type { AgentError } from '../agents/documenter/types.js';
 import { createAgentError, ErrorCodes } from '../agents/documenter/errors.js';
+
+// =============================================================================
+// Model Configuration
+// =============================================================================
+
+/** Default primary model when not configured */
+const DEFAULT_PRIMARY_MODEL = 'claude-haiku-4.5';
+
+/** Default fallback model */
+const DEFAULT_FALLBACK_MODEL = 'gpt-4o';
+
+/**
+ * Check if a model is a Claude model (uses OpenRouter)
+ */
+function isClaudeModel(model: string): boolean {
+  return model.toLowerCase().includes('claude');
+}
+
+/**
+ * Check if a model is a GPT model (uses OpenAI directly)
+ */
+function isGPTModel(model: string): boolean {
+  return model.toLowerCase().includes('gpt');
+}
 
 // =============================================================================
 // Fallback Configuration
@@ -35,7 +64,7 @@ function isFallbackEnabled(): boolean {
  * Default: gpt-4o
  */
 function getFallbackModel(): string {
-  return process.env.LLM_FALLBACK_MODEL || 'gpt-4o';
+  return process.env.LLM_FALLBACK_MODEL || DEFAULT_FALLBACK_MODEL;
 }
 
 /**
@@ -43,6 +72,67 @@ function getFallbackModel(): string {
  */
 function isFallbackAvailable(): boolean {
   return !!process.env.OPENAI_API_KEY;
+}
+
+/**
+ * Check if error is a credits/insufficient funds error (402)
+ * These should fallback immediately without retry
+ */
+function isCreditsError(error: any): boolean {
+  if (error?.status === 402) return true;
+  if (error?.code === 402) return true;
+  const message = error?.message || String(error);
+  return message.includes('402') || 
+         message.includes('credits') || 
+         message.includes('insufficient') ||
+         message.includes('can only afford');
+}
+
+// =============================================================================
+// Configured Model
+// =============================================================================
+
+/** Cached configured model to avoid repeated config reads */
+let cachedConfiguredModel: string | null = null;
+
+/**
+ * Get the configured LLM model
+ * Priority: LLM_PRIMARY_MODEL env var > config file > default (claude-haiku-4.5)
+ * 
+ * @returns The configured model name
+ */
+export async function getConfiguredModel(): Promise<string> {
+  // Environment variable takes highest priority
+  const envModel = process.env.LLM_PRIMARY_MODEL;
+  if (envModel) {
+    return envModel;
+  }
+
+  // Return cached value if available
+  if (cachedConfiguredModel) {
+    return cachedConfiguredModel;
+  }
+
+  try {
+    // Dynamic import to avoid circular dependencies
+    const { loadConfig } = await import('./config.js');
+    const config = await loadConfig();
+    cachedConfiguredModel = config.documenter?.llm_model || DEFAULT_PRIMARY_MODEL;
+    logger.debug(`Configured LLM model: ${cachedConfiguredModel}`);
+    return cachedConfiguredModel;
+  } catch (error) {
+    // Config not available, use default
+    logger.warn(`Could not load LLM model from config, using default: ${DEFAULT_PRIMARY_MODEL}`);
+    cachedConfiguredModel = DEFAULT_PRIMARY_MODEL;
+    return cachedConfiguredModel;
+  }
+}
+
+/**
+ * Clear the cached configured model (useful for testing)
+ */
+export function clearConfiguredModelCache(): void {
+  cachedConfiguredModel = null;
 }
 
 // Initialize OpenRouter client (for LLM completions - Claude models)
@@ -617,15 +707,19 @@ export async function generateEmbeddings(
 /**
  * Main LLM calling function with retry logic and automatic fallback
  * 
- * Fallback Behavior:
- * - If primary provider (OpenRouter/Claude) fails after all retries
- * - And LLM_FALLBACK_ENABLED is not 'false'
- * - And OPENAI_API_KEY is available
- * - Then automatically falls back to GPT-4o
+ * Retry & Fallback Behavior:
+ * - 402 (credits) errors: Immediate fallback to GPT-4o (no retry)
+ * - Other errors: Retry once, then fallback to GPT-4o
+ * - Fallback controlled via LLM_FALLBACK_ENABLED env var (default: true)
+ * - Fallback model configurable via LLM_FALLBACK_MODEL (default: gpt-4o)
+ * 
+ * Model Routing:
+ * - Claude models → OpenRouter (OPENROUTER_API_KEY)
+ * - GPT models → OpenAI directly (OPENAI_API_KEY)
  */
 export async function callLLM(
   prompt: string,
-  model: string = 'claude-sonnet-4',
+  model: string = DEFAULT_PRIMARY_MODEL,
   options: {
     maxRetries?: number;
     retryDelay?: number;
@@ -636,7 +730,8 @@ export async function callLLM(
   } = {}
 ): Promise<LLMResponse> {
   const {
-    maxRetries = 3,
+    // Default to 2 retries (1 initial + 1 retry) for non-credits errors
+    maxRetries = 2,
     retryDelay = 1000,
     timeout: _timeout = 30000,
     maxTokens = 4096,
@@ -646,8 +741,10 @@ export async function callLLM(
   let lastError: AgentError | null = null;
   const retryHistory: Array<{ attempt: number; error: AgentError; delay?: number }> = [];
 
-  // Determine if this is a Claude model (potential for fallback)
-  const isClaudeModel = model.startsWith('claude-') || model.startsWith('anthropic/');
+  // Determine if this is a Claude model (uses OpenRouter, potential for fallback)
+  const modelIsClaudeModel = isClaudeModel(model);
+  // Determine if this is a GPT model (uses OpenAI directly)
+  const modelIsGPTModel = isGPTModel(model);
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -655,10 +752,10 @@ export async function callLLM(
 
       let response: LLMResponse;
 
-      if (isClaudeModel) {
+      if (modelIsClaudeModel) {
         // Use OpenRouter for Claude models
         response = await callClaude(prompt, model, maxTokens);
-      } else if (model.startsWith('gpt-')) {
+      } else if (modelIsGPTModel) {
         // Use OpenAI directly for GPT models
         response = await callOpenAI(prompt, model, maxTokens);
       } else {
@@ -682,7 +779,17 @@ export async function callLLM(
         context: classifiedError.context,
       });
 
-      // Check if we should retry
+      // Check if this is a credits error (402) - fallback immediately, no retry
+      if (isCreditsError(error) || isCreditsError(classifiedError)) {
+        logger.warn(`Credits error detected, falling back immediately without retry`);
+        retryHistory.push({
+          attempt,
+          error: classifiedError,
+        });
+        break; // Exit retry loop, try fallback
+      }
+
+      // Check if we should retry (for non-credits errors)
       const shouldRetry =
         attempt < maxRetries &&
         classifiedError.recoverable &&
@@ -725,7 +832,7 @@ export async function callLLM(
           throw classifiedError;
         }
 
-        // For other non-recoverable errors, throw immediately (but may fallback below)
+        // For other non-recoverable errors, exit retry loop (but may fallback below)
         if (!classifiedError.recoverable) {
           break; // Exit retry loop, try fallback
         }
@@ -738,7 +845,7 @@ export async function callLLM(
   // ==========================================================================
   
   const shouldTryFallback = 
-    isClaudeModel &&                    // Only fallback from Claude models
+    modelIsClaudeModel &&                // Only fallback from Claude models
     !disableFallback &&                  // Fallback not disabled for this call
     isFallbackEnabled() &&               // LLM_FALLBACK_ENABLED !== 'false'
     isFallbackAvailable();               // OPENAI_API_KEY is set
@@ -746,8 +853,12 @@ export async function callLLM(
   if (shouldTryFallback) {
     const fallbackModel = getFallbackModel();
     
+    const attemptsMsg = isCreditsError(lastError) 
+      ? '(credits error - immediate fallback)' 
+      : `after ${retryHistory.length} attempt(s)`;
+    
     logger.warn(
-      `Primary LLM (${model}) failed after ${maxRetries} attempts. ` +
+      `Primary LLM (${model}) failed ${attemptsMsg}. ` +
       `Falling back to ${fallbackModel}...`,
       {
         primaryModel: model,

@@ -32,7 +32,7 @@ const PlannerConfigSchema = z.object({
 const DocumenterConfigSchema = z.object({
   concurrency: z.number().default(5),
   sample_timeout_ms: z.number().default(5000),
-  llm_model: z.string().default('claude-sonnet-4'),
+  llm_model: z.string().default('claude-haiku-4.5'),
   checkpoint_interval: z.number().default(10),
   use_sub_agents: z.boolean().default(true),
 });
