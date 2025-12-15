@@ -22,13 +22,24 @@ export async function buildRelationshipsIndex(db: DatabaseType): Promise<void> {
   logger.info('Building relationships index');
 
   // 1. Extract foreign keys from parsed table documents
+  logger.info('[Relationships] Step 1: Extracting FKs from table documents...');
   await indexForeignKeysFromTables(db);
+  logger.info('[Relationships] Step 1 complete');
 
   // 2. Index explicit relationship documentation files
+  logger.info('[Relationships] Step 2: Indexing explicit relationship docs...');
   await indexExplicitRelationshipDocs(db);
+  logger.info('[Relationships] Step 2 complete');
 
   // 3. Compute multi-hop join paths using BFS
-  await computeMultiHopPaths(db);
+  // TEMPORARILY DISABLED - O(n²) is too slow for 300+ tables
+  // TODO: Optimize with domain-scoped computation or lazy evaluation
+  const ENABLE_MULTI_HOP = process.env.ENABLE_MULTI_HOP === 'true';
+  if (ENABLE_MULTI_HOP) {
+    await computeMultiHopPaths(db);
+  } else {
+    logger.info('Multi-hop path computation disabled (set ENABLE_MULTI_HOP=true to enable)');
+  }
 
   const relCount = db.prepare('SELECT COUNT(*) as count FROM relationships').get() as { count: number };
   logger.info(`Relationships index built: ${relCount.count} relationships`);
@@ -64,10 +75,17 @@ async function indexForeignKeysFromTables(db: DatabaseType): Promise<void> {
     content: string;
   }[];
 
+  logger.info(`[Relationships] Processing ${tables.length} table documents for FK extraction`);
+
   let count = 0;
+  let tableCount = 0;
 
   db.transaction(() => {
     for (const table of tables) {
+      tableCount++;
+      if (tableCount % 50 === 0) {
+        logger.info(`[Relationships] Processed ${tableCount}/${tables.length} tables...`);
+      }
       const foreignKeys = extractForeignKeysFromContent(table.content);
 
       for (const fk of foreignKeys) {
@@ -134,7 +152,8 @@ function extractForeignKeysFromContent(content: string): Array<{
     /(\w+)\s+references?\s+(?:(\w+)\.)?(\w+)\((\w+)\)/gi,  // col references [schema.]table(col)
     /FK:\s*(\w+)\s*->\s*(?:(\w+)\.)?(\w+)\.(\w+)/gi,  // FK: col -> [schema.]table.col
     /\*\*Foreign Key\*\*:\s*References?\s+(?:(\w+)\.)?(\w+)\.(\w+)/gi,  // Markdown FK
-    /foreign key[^}]*?(\w+)[^}]*?references?\s+(?:(\w+)\.)?(\w+)\s*\((\w+)\)/gi,  // SQL-style
+    // REMOVED: SQL-style pattern caused catastrophic backtracking
+    // /foreign key[^}]*?(\w+)[^}]*?references?\s+(?:(\w+)\.)?(\w+)\s*\((\w+)\)/gi,
   ];
 
   for (const pattern of patterns) {
