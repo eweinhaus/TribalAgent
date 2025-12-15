@@ -21,6 +21,7 @@ import { processWorkUnits } from './work-unit-processor.js';
 import { computeOverallStatus } from './status.js';
 import { createAgentError, ErrorCodes } from './errors.js';
 import { generateManifest, writeManifest } from './manifest-generator.js';
+import { generateCrossDomainRelationships } from './generators/CrossDomainRelationshipGenerator.js';
 import type {
   DocumenterProgress,
   DocumentationPlan,
@@ -120,6 +121,9 @@ export async function runDocumenter(): Promise<void> {
       
       throw error;
     }
+
+    // Generate cross-domain relationship maps
+    await generateCrossDomainRelationshipMaps(plan);
 
     // Mark as completed
     progress.status = computeOverallStatus(
@@ -268,6 +272,30 @@ function initializeProgress(plan: DocumentationPlan): DocumenterProgress {
     last_checkpoint: now,
     errors: [],
   };
+}
+
+/**
+ * Generate cross-domain relationship maps for all databases
+ */
+async function generateCrossDomainRelationshipMaps(plan: DocumentationPlan): Promise<void> {
+  const docsPath = process.env.TRIBAL_DOCS_PATH || 'docs';
+  
+  // Get unique databases from plan
+  const databases = [...new Set(plan.work_units.map(wu => wu.database))];
+  
+  logger.info(`Generating cross-domain relationship maps for ${databases.length} database(s)`);
+  
+  for (const database of databases) {
+    try {
+      const filePath = await generateCrossDomainRelationships(database, plan, docsPath);
+      if (filePath) {
+        logger.info(`Generated cross-domain relationships: ${filePath}`);
+      }
+    } catch (error) {
+      logger.warn(`Failed to generate cross-domain relationships for ${database}`, error);
+      // Continue with other databases - this is non-fatal
+    }
+  }
 }
 
 // Run if executed directly
