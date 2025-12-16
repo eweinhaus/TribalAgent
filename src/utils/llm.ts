@@ -6,6 +6,8 @@
  * 
  * Model Selection:
  * - LLM_PRIMARY_MODEL env var: Override primary model (default: claude-haiku-4.5)
+ * - LLM_PLANNER_MODEL env var: Override model for planner/domain-inference only
+ *   (use claude-sonnet-4.5 for more accurate domain grouping)
  * - Claude models use OpenRouter (OPENROUTER_API_KEY)
  * - GPT models use OpenAI directly (OPENAI_API_KEY)
  * 

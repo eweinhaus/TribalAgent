@@ -4,6 +4,10 @@
  * Implements LLM-based domain detection using the domain-inference.md prompt template.
  * Falls back to prefix-based grouping when LLM is unavailable or fails.
  *
+ * Environment Variables:
+ * - LLM_PLANNER_MODEL: Override model for planner only (e.g., claude-sonnet-4.5 for better accuracy)
+ * - LLM_PRIMARY_MODEL: General override for all LLM calls
+ *
  * @module agents/planner/domain-inference
  */
 
@@ -100,9 +104,9 @@ async function inferDomainsWithLLM(
     // Load and populate the prompt template
     const prompt = await buildDomainInferencePrompt(database, tables, relationships);
 
-    // Call LLM - env var takes priority, then config, then default
-    // LLM_PRIMARY_MODEL env var allows quick switching without config changes
-    const model = process.env.LLM_PRIMARY_MODEL || config.llm_model || 'claude-haiku-4.5';
+    // Call LLM - planner-specific env var takes priority, then general primary, then config, then default
+    // LLM_PLANNER_MODEL allows using a smarter model for domain inference
+    const model = process.env.LLM_PLANNER_MODEL || process.env.LLM_PRIMARY_MODEL || config.llm_model || 'claude-haiku-4.5';
     logger.info(`Calling LLM for domain inference (${tables.length} tables)`, { model });
 
     const response = await callLLM(prompt, model, {
@@ -340,6 +344,7 @@ export function inferDomainsByPrefix(tables: TableMetadata[]): Record<DomainName
 /**
  * Validate that every table is assigned to exactly one domain.
  * Catches LLM omissions and duplicate assignments.
+ * Handles LLM returning table names without schema prefixes.
  */
 export function validateDomainAssignments(
   domains: Record<DomainName, string[]>,
@@ -349,8 +354,39 @@ export function validateDomainAssignments(
   const assignedTables = new Set<string>();
   const tableAssignments = new Map<string, string[]>();
 
-  // Track all assignments
+  // Build a lookup map: table name (without schema) -> full name
+  // This handles LLM returning "PAYMENTS" when we expect "PUBLIC.PAYMENTS"
+  const tableNameLookup = new Map<string, string>();
+  for (const fullName of allTables) {
+    // Add full name lookup (case-insensitive)
+    tableNameLookup.set(fullName.toLowerCase(), fullName);
+    // Add short name lookup (just the table part, case-insensitive)
+    const shortName = fullName.split('.').pop() || fullName;
+    // Only add short name if it doesn't conflict
+    if (!tableNameLookup.has(shortName.toLowerCase())) {
+      tableNameLookup.set(shortName.toLowerCase(), fullName);
+    }
+  }
+
+  // Normalize domain table names to full qualified names
+  const normalizedDomains: Record<DomainName, string[]> = {};
   for (const [domain, tables] of Object.entries(domains)) {
+    normalizedDomains[domain] = [];
+    for (const table of tables) {
+      // Try to find the full name
+      const fullName = tableNameLookup.get(table.toLowerCase());
+      if (fullName) {
+        normalizedDomains[domain].push(fullName);
+      } else {
+        // Keep original if no match found
+        normalizedDomains[domain].push(table);
+        logger.debug(`Could not resolve table name: ${table}`);
+      }
+    }
+  }
+
+  // Track all assignments using normalized names
+  for (const [domain, tables] of Object.entries(normalizedDomains)) {
     for (const table of tables) {
       assignedTables.add(table);
       if (!tableAssignments.has(table)) {
@@ -368,7 +404,7 @@ export function validateDomainAssignments(
       );
       // Remove from all but the first domain
       for (let i = 1; i < assignedDomains.length; i++) {
-        domains[assignedDomains[i]] = domains[assignedDomains[i]].filter((t) => t !== table);
+        normalizedDomains[assignedDomains[i]] = normalizedDomains[assignedDomains[i]].filter((t) => t !== table);
       }
     }
   }
@@ -385,22 +421,22 @@ export function validateDomainAssignments(
     });
 
     // Create 'uncategorized' domain for unassigned tables
-    if (!domains['uncategorized']) {
-      domains['uncategorized'] = [];
+    if (!normalizedDomains['uncategorized']) {
+      normalizedDomains['uncategorized'] = [];
     }
-    domains['uncategorized'].push(...unassignedTables);
+    normalizedDomains['uncategorized'].push(...unassignedTables);
   }
 
   // Remove empty domains
-  for (const [domain, tables] of Object.entries(domains)) {
+  for (const [domain, tables] of Object.entries(normalizedDomains)) {
     if (tables.length === 0) {
-      delete domains[domain];
+      delete normalizedDomains[domain];
     }
   }
 
   return {
     valid: unassignedTables.length === 0 && warnings.length === 0,
-    domains,
+    domains: normalizedDomains,
     warnings,
   };
 }
